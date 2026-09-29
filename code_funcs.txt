@@ -1,0 +1,22 @@
+function addFieldToForm(form, field, payload) {
+function appendAuditLog(ss, payload, form, responseSs) {
+function cleanupDeadTriggers() {
+function computeDiffRichText(baselineStr, extractedStr) {
+function deleteAllTriggers() {
+function generateForm(payload) { try {
+function getConfigData() {
+function masterFormLifecycleCron() {
+function masterRespondToRegistration(e) {
+function onOpen() {
+function parseLocalDate(dtString) {
+function runAudit() {
+function runFieldAudit() {
+function runSetup() {
+function setupAirportMapping(ss) {
+function setupAuditSheet() {
+function setupFieldDictionary(ss) {
+function setupTemplates(ss) {
+function showSidebar() {
+function testEmailVersions() {
+function translateText(text, targetLanguages) {
+function upgradeExistingSheet() {

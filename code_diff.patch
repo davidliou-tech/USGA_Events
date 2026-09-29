@@ -1,0 +1,1373 @@
+--- Code_v2.6.gs	2026-09-15 12:42:17
++++ Code.gs	2026-09-15 12:18:14
+@@ -1,11 +1,12 @@
++/**
+  * @fileoverview Main backend logic for the USGA Event Registration Form Generator V2
+  */
+ 
+-
+ function onOpen() {
+   const ui = SpreadsheetApp.getUi();
+   ui.createMenu('USGA Events')
+       .addItem('Open Form Generator', 'showSidebar')
++      .addItem('Manage Active Events', 'showManageEventsSidebar')
+       .addSeparator()
+       .addItem('Setup Initial Configuration (Run Once)', 'runSetup')
+       .addSeparator()
+@@ -22,7 +23,6 @@
+       .addToUi();
+ }
+ 
+-
+ function showSidebar() {
+   const html = HtmlService.createHtmlOutputFromFile('Sidebar')
+       .setTitle('USGA Event Form Generator')
+@@ -30,7 +30,70 @@
+   SpreadsheetApp.getUi().showSidebar(html);
+ }
+ 
++function showManageEventsSidebar() {
++  const html = HtmlService.createHtmlOutputFromFile('ManageEventsSidebar')
++      .setTitle('Manage Active Events')
++      .setWidth(350);
++  SpreadsheetApp.getUi().showSidebar(html);
++}
+ 
++function getMonitoredEvents() {
++  const props = PropertiesService.getScriptProperties();
++  const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
++  
++  const results = [];
++  
++  for (const formId in formsToMonitor) {
++    const config = formsToMonitor[formId];
++    let title = "";
++    
++    try {
++      const form = FormApp.openById(formId);
++      title = String(form.getTitle() || "");
++      if (!title || title.trim() === "") {
++        // Fallback to the file name in Google Drive
++        title = String(DriveApp.getFileById(formId).getName() || "");
++      }
++    } catch(e) {
++      title = "Deleted/Inaccessible Form";
++    }
++    
++    if (!title || title.trim() === "") {
++      title = "Unknown Event (ID: " + formId.substring(0,8) + "...)";
++    }
++    
++    results.push({
++      formId: formId,
++      title: title,
++      config: config
++    });
++  }
++  
++  return results;
++}
++
++function updateMonitoredEvent(formId, updatedConfig) {
++  const props = PropertiesService.getScriptProperties();
++  const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
++  
++  if (!formsToMonitor[formId]) {
++    throw new Error("Form ID is no longer being monitored.");
++  }
++  
++  formsToMonitor[formId] = {
++    ...formsToMonitor[formId],
++    ...updatedConfig
++  };
++  
++  props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
++  
++  // Re-run the lifecycle cron immediately to apply any date changes instantly
++  masterFormLifecycleCron();
++  
++  return true;
++}
++
++
+ function getConfigData() {
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   
+@@ -57,7 +120,6 @@
+     }
+   }
+ 
+-
+   const templateSheet = ss.getSheetByName('Templates');
+   let templates = [];
+   if (templateSheet) {
+@@ -76,11 +138,9 @@
+     }
+   }
+ 
+-
+   // Alphabetize templates by name
+   templates.sort((a, b) => a.name.localeCompare(b.name));
+ 
+-
+   const airportSheet = ss.getSheetByName('Airport Mapping');
+   let airportMapping = {};
+   if (airportSheet) {
+@@ -96,11 +156,9 @@
+     }
+   }
+ 
+-
+   return { dictionary: dictionary, templates: templates, airportMapping: airportMapping };
+ }
+ 
+-
+ function generateForm(payload) { try {
+   // 0. Verify Email Authorization
+   const requiredEmail = (payload.eventDetails.contactEmail || "us.events@tjc.org").toLowerCase();
+@@ -112,7 +170,6 @@
+     throw new Error(`Authentication Error: You are logged in as ${activeEmail || "a different account"}. You must log into the ${requiredEmail} account (or have it set as an authorized alias) to generate this form, ensuring automated receipts are sent from the correct mailbox.`);
+   }
+ 
+-
+   // 1. Create the new Form
+   let formTitle = payload.eventDetails.title || 'Untitled USGA Event';
+   
+@@ -157,57 +214,22 @@
+   
+   const start = payload.eventDetails.startDate;
+   const end = payload.eventDetails.endDate;
+-
+-
+-  const formatDt = (dtStr) => {
+-    if (!dtStr) return '';
+-    const d = parseLocalDate(dtStr);
+-    if (!d) return '';
+-    
++  const formatDt = (dt) => {
++    if (!dt) return '';
++    const [y, m, d] = dt.split('-');
++    const dateObj = new Date(y, m - 1, d);
+     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+-    const mm = String(d.getMonth() + 1).padStart(2, '0');
+-    const dd = String(d.getDate()).padStart(2, '0');
+-    const yyyy = d.getFullYear();
+-    
+-    let timeStr = "";
+-    if (dtStr.includes('T')) {
+-      let hours = d.getHours();
+-      let minutes = d.getMinutes();
+-      const ampm = hours >= 12 ? 'PM' : 'AM';
+-      hours = hours % 12;
+-      hours = hours ? hours : 12; // convert 0 to 12
+-      minutes = minutes < 10 ? '0' + minutes : minutes;
+-      timeStr = `, ${hours}:${minutes} ${ampm}`;
+-    }
+-    
+-    return `${days[d.getDay()]}, ${mm}/${dd}/${yyyy}${timeStr}`;
++    return `${m}/${d}/${y} (${days[dateObj.getDay()]})`;
+   };
+   
+-  const formatDtZh = (dtStr) => {
+-    if (!dtStr) return "";
+-    const d = parseLocalDate(dtStr);
+-    if (!d) return "";
+-    
++  const formatDtZh = (dt) => {
++    if (!dt) return "";
++    const [y, m, d] = dt.split("-");
++    const dateObj = new Date(y, m - 1, d);
+     const days = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+-    const mm = String(d.getMonth() + 1).padStart(2, '0');
+-    const dd = String(d.getDate()).padStart(2, '0');
+-    const yyyy = d.getFullYear();
+-    
+-    let timeStr = "";
+-    if (dtStr.includes('T')) {
+-      let hours = d.getHours();
+-      let minutes = d.getMinutes();
+-      const ampm = hours >= 12 ? '下午' : '上午';
+-      let displayHour = hours % 12;
+-      displayHour = displayHour ? displayHour : 12;
+-      minutes = minutes < 10 ? '0' + minutes : minutes;
+-      timeStr = ` ${ampm} ${displayHour}:${minutes}`;
+-    }
+-    
+-    return `${mm}/${dd}/${yyyy} (${days[d.getDay()]})${timeStr}`;
++    return `${m}/${d}/${y} (${days[dateObj.getDay()]})`;
+   };
+ 
+-
+   const formatRegDt = (dtStr) => {
+     if (!dtStr) return "";
+     const d = parseLocalDate(dtStr);
+@@ -228,10 +250,10 @@
+     return `${mm}/${dd}/${yyyy}`;
+   };
+ 
+-
++  
+   if (start && end) {
+-    let base = `𝗘𝘃𝗲𝗻𝘁 𝗗𝗮𝘁𝗲𝘀: ${formatDt(start)} – ${formatDt(end)}`;
+-    if (hasLang) base += `\n活動日期: ${isZh ? formatDtZh(start) : formatDt(start)} – ${isZh ? formatDtZh(end) : formatDt(end)}`;
++    let base = `𝗘𝘃𝗲𝗻𝘁 𝗗𝗮𝘁𝗲𝘀: ${formatDt(start)} - ${formatDt(end)}`;
++    if (hasLang) base += `\n活動日期: ${isZh ? formatDtZh(start) : formatDt(start)} - ${isZh ? formatDtZh(end) : formatDt(end)}`;
+     descLines.push(base);
+   } else if (start || end) {
+     let base = `𝗘𝘃𝗲𝗻𝘁 𝗗𝗮𝘁𝗲: ${formatDt(start || end)}`;
+@@ -260,7 +282,6 @@
+     descLines.push(base);
+   }
+ 
+-
+   if (payload.eventDetails.airports) {
+     let base = `𝗣𝗿𝗲𝗳𝗲𝗿𝗿𝗲𝗱 𝗔𝗶𝗿𝗽𝗼𝗿𝘁: ${payload.eventDetails.airports}`;
+     if (hasLang) base += `\n首選機場: ${t_only(payload.eventDetails.airports) || payload.eventDetails.airports}`;
+@@ -284,7 +305,6 @@
+   }
+   
+ 
+-
+   if (payload.eventDetails.maxAttendees) {
+     let base = `𝗠𝗮𝘅𝗶𝗺𝘂𝗺 𝗔𝘁𝘁𝗲𝗻𝗱𝗲𝗲𝘀: ${payload.eventDetails.maxAttendees}`;
+     if (hasLang) {
+@@ -294,27 +314,12 @@
+     descLines.push(base);
+   }
+ 
+-
+   let attendeesLine = `𝗔𝘁𝘁𝗲𝗻𝗱𝗲𝗲𝘀: View Here`;
+   if (hasLang) {
+     attendeesLine += `\n${t_only('Attendees') || 'Attendees'}: ${t_only('View Here') || 'View Here'}`;
+   }
+   descLines.push(attendeesLine);
+-
+-
+-  // --- ADDED: CYSC Specific Disclaimer ---
+-  const eventTemplateName = (payload.eventDetails && payload.eventDetails.templateName) ? payload.eventDetails.templateName : formTitle;
+   
+-  if (eventTemplateName.includes('CYSC') || eventTemplateName.includes('College Youth Spiritual Convocation')) {
+-    const cyscNotice = "Attendees for this convocation must be 18 years old or above, corresponding to Senior Class in most churches. Working youths who graduated within the past 2 years are also welcome to attend but need to register and follow the same rules and regulations as the other attendees.";
+-    let baseNotice = cyscNotice;
+-    if (hasLang) {
+-       baseNotice += `\n${t_only(cyscNotice) || cyscNotice}`;
+-    }
+-    descLines.push(baseNotice);
+-  }
+-  // ---------------------------------------
+-  
+   let isMinorEvent = false;
+   
+   if (payload.eventDetails.includesMinors !== undefined) {
+@@ -336,7 +341,6 @@
+   
+   form.setDescription(descLines.join('\n\n'));
+ 
+-
+   // Enforce Parent/Guardian field visibility: safely remove if NOT a minor event
+   if (!isMinorEvent) {
+      payload.selectedFields = payload.selectedFields.filter(f => !f.name.includes('Parent/Guardian'));
+@@ -349,7 +353,6 @@
+      }
+   });
+ 
+-
+   // Pluck out Minor's Email so we can force it into Section 1
+   const minorEmailFieldIndex = payload.selectedFields.findIndex(f => f.name === 'Minor\'s Email (at least 13 years of age)');
+   let minorEmailField = null;
+@@ -357,7 +360,6 @@
+     minorEmailField = payload.selectedFields.splice(minorEmailFieldIndex, 1)[0];
+   }
+ 
+-
+   if (isMinorEvent) {
+      const fieldDef = minorEmailField || {
+          name: 'Minor\'s Email (at least 13 years of age)',
+@@ -367,7 +369,6 @@
+      addFieldToForm(form, fieldDef, payload);
+   }
+ 
+-
+   // 3. Add Global Data Privacy Consent
+   form.addMultipleChoiceItem()
+     .setTitle(t("I hereby give consent to the General Assembly of the True Jesus Church in the USA, related True Jesus Church local churches and houses of prayer, and their authorized officers, employees, volunteers, and agents (collectively, “TJC”) to collect, maintain, store and use my personal information from this form for the purposes of this event for which I'm registering and/or any related activities."))
+@@ -377,7 +378,6 @@
+     ])
+     .setRequired(true);
+ 
+-
+   // Force Lodging Fields to ALWAYS be present across all templates
+   const hasBefore = payload.selectedFields.some(f => f.name === 'I need lodging before the event');
+   const hasAfter = payload.selectedFields.some(f => f.name === 'I need lodging after the event');
+@@ -406,11 +406,9 @@
+      payload.selectedFields.find(f => f.name === 'I need lodging after the event').required = true;
+   }
+ 
+-
+   const hasFood = payload.selectedFields.some(f => f.name === 'Food/Medicine Restrictions');
+   const hasSpecial = payload.selectedFields.some(f => f.name === 'Other Special Needs/Accommodations (e.g., mobility assistance)');
+ 
+-
+   if (!hasFood) {
+      payload.selectedFields.push({
+          name: 'Food/Medicine Restrictions',
+@@ -429,7 +427,6 @@
+      });
+   }
+ 
+-
+   // 4. Group selected fields by Category
+   const fieldsByCategory = {};
+   payload.selectedFields.forEach(field => {
+@@ -445,10 +442,8 @@
+     fieldsByCategory[cat].push(field);
+   });
+ 
+-
+   const categories = Object.keys(fieldsByCategory).filter(c => c !== "_FINAL_RELEASES_");
+ 
+-
+   let arrivalDetailsItem = null;
+   let departureDetailsItem = null;
+   let arrivalFlightSection = null;
+@@ -458,7 +453,6 @@
+   let arrivalTrainSection = null;
+   let departureTrainSection = null;
+ 
+-
+   categories.forEach(category => {
+     const pb = form.addPageBreakItem().setTitle(t(category));
+     if (category === 'Arrival Flight Details') arrivalFlightSection = pb;
+@@ -471,7 +465,6 @@
+        postTravelSection = pb;
+     }
+ 
+-
+     fieldsByCategory[category].forEach(field => {
+       const item = addFieldToForm(form, field, payload);
+       if (item && field.name === 'Arrival Details' && item.getType() === FormApp.ItemType.MULTIPLE_CHOICE) arrivalDetailsItem = item;
+@@ -479,7 +472,6 @@
+     });
+   });
+ 
+-
+   // 5. Strict enforcement: Always append Releases & Feedback last
+   if (fieldsByCategory["_FINAL_RELEASES_"]) {
+     const pb = form.addPageBreakItem().setTitle(t("CONSENT AND WAIVERS"))
+@@ -491,7 +483,6 @@
+     });
+   }
+ 
+-
+   // 6. Link Travel Logistics Page Navigation
+   if (arrivalDetailsItem) {
+     const choices = [];
+@@ -506,7 +497,6 @@
+     arrivalDetailsItem.setChoices(choices);
+   }
+ 
+-
+   if (departureDetailsItem) {
+     const target = postTravelSection ? postTravelSection : FormApp.PageNavigationType.SUBMIT;
+     const choices = [];
+@@ -526,7 +516,6 @@
+     departureDetailsItem.setChoices(choices);
+   }
+ 
+-
+   // -------------------------------------------------------------
+   // V2 FEATURES: SUBFOLDER, RESPONSE SHEET, SETTINGS, & TRIGGERS
+   // -------------------------------------------------------------
+@@ -563,25 +552,22 @@
+   let dateStringSheet = "";
+   let dateStringZhSheet = "";
+   if (start && end) {
+-     dateStringSheet = `Event Dates: ${formatDt(start)} – ${formatDt(end)}`;
+-     dateStringZhSheet = `活動日期: ${formatDtZh(start)} – ${formatDtZh(end)}`;
++     dateStringSheet = `Event Dates: ${formatDt(start)} - ${formatDt(end)}`;
++     dateStringZhSheet = `活動日期: ${formatDtZh(start)} - ${formatDtZh(end)}`;
+   } else if (start || end) {
+      dateStringSheet = `Event Date: ${formatDt(start || end)}`;
+      dateStringZhSheet = `活動日期: ${formatDtZh(start || end)}`;
+   }
+ 
+-
+   let preMsgSheet = regStartStr ? `Registration for ${formTitle} will open on ${regStartStr}. ${dateStringSheet}\n\nIf you have any questions, please contact ${emailStr}.` : `Registration for ${formTitle} is not yet open. ${dateStringSheet}\n\nIf you have any questions, please contact ${emailStr}.`;
+   let postMsgSheet = `Registration for ${formTitle} is now closed. ${dateStringSheet}\n\nIf you have any questions or require assistance, please contact ${emailStr}.`;
+ 
+-
+   if (payload.languages && payload.languages.includes('zh-TW')) {
+      const preZh = regStartStrZh ? `${formTitle} 的報名將於 ${regStartStrZh} 開放。` : `${formTitle} 的報名尚未開放。`;
+      preMsgSheet += `\n\n${preZh} ${dateStringZhSheet}\n\n如果您有任何問題，請聯繫 ${emailStr}。`;
+      postMsgSheet += `\n\n${formTitle} 的報名現已截止。 ${dateStringZhSheet}\n\n如果您有任何問題或需要協助，請聯繫 ${emailStr}。`;
+   }
+ 
+-
+   closedMsgSheet.getRange("A1:B1").setValues([["Message Type", "Message Text"]]).setFontWeight("bold").setBackground("#d9ead3");
+   closedMsgSheet.getRange("A2:B2").setValues([["Pre-Registration (Opens soon)", preMsgSheet]]);
+   closedMsgSheet.getRange("A3:B3").setValues([["Post-Registration (Closed)", postMsgSheet]]);
+@@ -590,7 +576,6 @@
+   closedMsgSheet.getRange("B2:B3").setWrap(true);
+   closedMsgSheet.getRange("A1:B3").setVerticalAlignment("top");
+ 
+-
+   
+   const participantsSheet = responseSs.insertSheet("Participants");
+   const fnMatch = `MATCH("First Name*", 'Form Responses 1'!1:1, 0)`;
+@@ -655,10 +640,8 @@
+     "Emergency Contact Phone": "Emergency Contact Phone"
+   };
+ 
+-
+   const selectedNames = payload.selectedFields.map(f => f.name);
+ 
+-
+   if (selectedNames.some(n => n.includes("Local Church") || n.includes("What fellowship"))) {
+      logHeaders.push("Local Church/Place of Worship");
+   }
+@@ -672,7 +655,6 @@
+     }
+   }
+ 
+-
+   if (selectedNames.some(n => n === "I need lodging before the event") && !logHeaders.includes("Lodging Before")) {
+       logHeaders.push("Lodging Before");
+   }
+@@ -686,10 +668,8 @@
+       logHeaders.push("Other Special Needs");
+   }
+ 
+-
+   logHeaders.push("Room Assignment", "Group/Team", "Notes");
+ 
+-
+   logisticsSheet.appendRow(logHeaders);
+   
+   const autoColCount = logHeaders.length - 3;
+@@ -704,7 +684,6 @@
+   }
+   logisticsSheet.getRange(1, 1, logisticsSheet.getMaxRows(), logHeaders.length).createFilter();
+ 
+-
+   // ----------------------------------------------------
+   // Add Summary Dashboard Sheet
+   // ----------------------------------------------------
+@@ -718,13 +697,11 @@
+      return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("${name}*", 'Form Responses 1'!1:1, 0)), "${val}"), 0)`;
+   };
+ 
+-
+   // Helper for wildcard arrival/departure matching
+   const cTravelMatch = (type, mode) => {
+      return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("${type}*", 'Form Responses 1'!1:1, 0)), "*${mode}*"), COUNTIF('Form Responses 1'!1:1000, "*${type === 'Arrival' ? 'arriving' : 'departing'} by ${mode}*"))`;
+   };
+ 
+-
+   sumData.push(["Total Registrants", `="Total: " & IF(Participants!A2="No responses yet", 0, COUNTA(Participants!A2:A))`, "", ""]);
+   sumData.push(["", "", "", ""]);
+   
+@@ -737,7 +714,6 @@
+   sumData.push(["Does Not Need Drop-off", cCountIfs("Departure", "*need drop*"), "", ""]);
+   sumData.push(["", "", "", ""]);
+ 
+-
+   sumData.push(["Lodging Needs", "", "", ""]);
+     const cLodgingMatch = (mode) => {
+      if (mode === "Yes") {
+@@ -747,12 +723,10 @@
+      }
+   };
+ 
+-
+   sumData.push(["Staying at Hosting Church", cLodgingMatch("Yes"), "", ""]);
+   sumData.push(["Not Staying at Hosting Church", cLodgingMatch("No"), "", ""]);
+   sumData.push(["", "", "", ""]);
+ 
+-
+   sumData.push(["Dietary & Medical", "", "", ""]);
+   const cNeedsMatch = (matcher) => {
+       const idx = `INDEX('Form Responses 1'!A2:ZZ1000, 0, MATCH("${matcher}", 'Form Responses 1'!1:1, 0))`;
+@@ -762,7 +736,6 @@
+   sumData.push(["Has Other Special Needs", cNeedsMatch("Other Special Needs*"), "", ""]);
+   sumData.push(["", "", "", ""]);
+ 
+-
+   sumData.push(["Demographics", "", "", ""]);
+   sumData.push(["Males", cCountIfs("Gender", "*Male*"), "", ""]);
+   sumData.push(["Females", cCountIfs("Gender", "*Female*"), "", ""]);
+@@ -776,7 +749,6 @@
+       });
+   }
+ 
+-
+   sumData.push(["", "", "", ""]);
+   
+   const prefs = ['Light sleeper (sensitive to noise/light)', 'Heavy sleeper', 'Early riser', 'Late sleeper', 'Snorer'];
+@@ -793,7 +765,6 @@
+      sumData.push([p, prefCountIfs(p, "Male"), prefCountIfs(p, "Female"), prefCountIfs(p, null)]);
+   });
+ 
+-
+   summarySheet.getRange(3, 1, sumData.length, 4).setValues(sumData);
+   summarySheet.getRange(3, 1, sumData.length, 1).setFontWeight("bold");
+   summarySheet.setColumnWidth(1, 300);
+@@ -808,7 +779,6 @@
+         summarySheet.getRange(3+i, 1, 1, 4).setBackground("#f3f3f3").setFontColor("#333333").setFontWeight("bold");
+      }
+   }
+-
+ 
+ // ----------------------------------------------------
+ // Add Airport Summary Sheet
+@@ -833,9 +803,28 @@
+ }
+ 
+ 
+-
+-
+ // ----------------------------------------------------
++// Add Airport Summary Sheet
++// ----------------------------------------------------
++if (arrivalDetailsItem || departureSection) {
++  const airportSummarySheet = responseSs.insertSheet("Airport Summary");
++  airportSummarySheet.getRange("A1").setValue("Event Airport Summary").setFontWeight("bold").setFontSize(14);
++  
++  airportSummarySheet.getRange("A3").setValue("Arrivals by Airport").setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
++  const arrCol = `MATCH("Arrival City/Airport*", 'Form Responses 1'!1:1, 0)`;
++  airportSummarySheet.getRange("A4").setFormula(`=IFERROR(QUERY('Form Responses 1'!A:ZZ, "SELECT Col" & ${arrCol} & ", COUNT(Col" & ${arrCol} & ") WHERE Col" & ${arrCol} & " IS NOT NULL GROUP BY Col" & ${arrCol} & " LABEL COUNT(Col" & ${arrCol} & ") ''", -1), {"No arrivals data", ""})`);
++  
++  airportSummarySheet.getRange("D3").setValue("Departures by Airport").setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
++  const depCol = `MATCH("Departure City/Airport*", 'Form Responses 1'!1:1, 0)`;
++  airportSummarySheet.getRange("D4").setFormula(`=IFERROR(QUERY('Form Responses 1'!A:ZZ, "SELECT Col" & ${depCol} & ", COUNT(Col" & ${depCol} & ") WHERE Col" & ${depCol} & " IS NOT NULL GROUP BY Col" & ${depCol} & " LABEL COUNT(Col" & ${depCol} & ") ''", -1), {"No departures data", ""})`);
++  
++  airportSummarySheet.setColumnWidth(1, 300);
++  airportSummarySheet.setColumnWidth(2, 100);
++  airportSummarySheet.setColumnWidth(3, 50);
++  airportSummarySheet.setColumnWidth(4, 300);
++  airportSummarySheet.setColumnWidth(5, 100);
++}
++
+   // Clean up the initial default blank sheet (e.g. "Sheet1")
+   try {
+     if (defaultSheet) {
+@@ -867,7 +856,6 @@
+       .onFormSubmit()
+       .create();
+ 
+-
+   // Save Registration Lifecycle config
+   if (payload.eventDetails.regStartDate || payload.eventDetails.regEndDate || payload.eventDetails.maxAttendees) {
+     const props = PropertiesService.getScriptProperties();
+@@ -911,15 +899,11 @@
+     }
+   }
+ 
+-
+   const masterSs = SpreadsheetApp.getActiveSpreadsheet();
+   appendAuditLog(masterSs, payload, form, responseSs);
+ 
+ 
+ 
+-
+-
+-
+   return {
+     editUrl: form.getEditUrl(),
+     sheetUrl: responseSs.getUrl(),
+@@ -930,7 +914,6 @@
+   }
+ }
+ 
+-
+ /**
+  * Helper to map our dictionary types to FormApp methods.
+  */
+@@ -946,7 +929,6 @@
+   const t = (text) => translateText(text, languages);
+   const isZh = languages.includes('zh-TW');
+ 
+-
+   if (field.name === 'I need lodging before the event' || field.name === 'I need lodging after the event') {
+     const isBefore = field.name.includes('before');
+     const targetDate = isBefore ? (payload.eventDetails && payload.eventDetails.startDate) : (payload.eventDetails && payload.eventDetails.endDate);
+@@ -978,7 +960,6 @@
+     return item;
+   }
+ 
+-
+   if (field.name === 'Minor\'s Email (at least 13 years of age)') {
+     item = form.addTextItem().setTitle(t(field.name));
+     item.setHelpText(t('If the event participant is a minor and at least 13 years of age, designated church personnel may communicate directly with the minor. By providing the minor’s email (below), the parent/guardian consents to the direct communication with the minor participant regarding essential event logistics, schedules, event updates, and planning details.'));
+@@ -1043,7 +1024,6 @@
+       finalHelp += '\n\n' + zhHelp;
+     }
+ 
+-
+     form.addSectionHeaderItem().setTitle(finalTitle).setHelpText(finalHelp);
+         
+     item = form.addMultipleChoiceItem().setTitle(finalTitle);
+@@ -1059,7 +1039,6 @@
+       finalOpt2 += ' / 本人選擇退出（Opt out），不同意提供上述任何一般媒體授權。此一選擇可能導致本人（或本人子女）不被納入真耶穌教會就本次活動所拍攝、錄製、製作或發布之官方照片、錄音、影像及／或其他媒體作品（包括影片展示）中。本人了解，此決定可能限制本人（或本人子女）參與部分涉及影像或音訊拍攝、錄製之活動。';
+     }
+ 
+-
+     item.setChoiceValues([finalOpt1, finalOpt2]);
+     if (field.required) item.setRequired(true);
+     return item;
+@@ -1127,7 +1106,6 @@
+     'TTN': 'Trenton-Mercer Airport (TTN)'
+   };
+ 
+-
+   let mappedCodes = [];
+   const host = (payload.eventDetails && payload.eventDetails.host) ? payload.eventDetails.host : "";
+   
+@@ -1146,18 +1124,15 @@
+     }
+   } catch(e) {}
+ 
+-
+   let mappedFullNames = mappedCodes.map(code => airportFullNames[code] || code);
+   const preferredArr = airports ? airports.split(',').map(s => s.trim()).filter(s => s !== '') : [];
+   
+   let finalChoices = [];
+ 
+-
+   preferredArr.forEach(pref => {
+      finalChoices.push(`⭐ ${pref}`);
+   });
+ 
+-
+   mappedFullNames.forEach(mapped => {
+      const isPref = preferredArr.some(p => p.toLowerCase() === mapped.toLowerCase());
+      if (!isPref) {
+@@ -1165,7 +1140,6 @@
+      }
+   });
+ 
+-
+   if (finalChoices.length > 0) {
+       item = form.addMultipleChoiceItem().setTitle(t(field.name));
+       item.setChoiceValues(finalChoices.map(c => t(c)));
+@@ -1184,7 +1158,6 @@
+   return item;
+ }
+ 
+-
+   if (typeStr.includes('short answer') || typeStr.includes('text') || typeStr.includes('number')) {
+     item = form.addTextItem().setTitle(t(field.name));
+   } 
+@@ -1286,12 +1259,10 @@
+     item = form.addTextItem().setTitle(t(field.name));
+   }
+ 
+-
+   if (item && typeof item.setRequired === 'function') {
+     item.setRequired(field.required === true);
+   }
+ 
+-
+   if (item && typeof item.setHelpText === 'function') {
+     const t_only = (text) => {
+        let full = t(text);
+@@ -1310,7 +1281,6 @@
+       }
+     };
+ 
+-
+     if (field.name === 'Departing City/Airport') {
+       const baseHelp = 'Please enter the airport name and code where your flight originates.';
+       item.setHelpText(t(baseHelp));
+@@ -1329,7 +1299,6 @@
+   return item;
+ }
+ 
+-
+ /**
+  * Centralized email handler triggered whenever ANY generated form is submitted.
+  */
+@@ -1391,7 +1360,6 @@
+     
+     if (!emailRecipient) return;
+ 
+-
+     let settings = {
+       EventName: "USGA Event",
+       OrgName: "USGA",
+@@ -1411,12 +1379,10 @@
+       } catch(e) {}
+     }
+ 
+-
+     const isRejected = medicalConsent.toLowerCase().startsWith("no");
+     const commonStyles = `style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50;"`;
+     const signature = `<p ${commonStyles}>In Christ,<br><span style="color: #2980b9; font-weight: bold;">${settings.OrgName}</span></p>`;
+ 
+-
+     let logoBlob = null;
+     let logoHtml = "";
+     try {
+@@ -1426,12 +1392,10 @@
+       Logger.log("Could not load logo: " + err.message);
+     }
+ 
+-
+     try {
+       let lastName = "", phone = "", arrDetails = "", arrDate = "", arrTime = "", depCity = "", arrCity = "", arrAirline = "", arrFlight = "";
+       let depDetails = "", depDate = "", depTime = "", depCityOut = "", depAirline = "", depFlight = "", destCity = "";
+ 
+-
+       for (let header in responses) {
+         let hLower = header.toLowerCase();
+         let val = responses[header][0];
+@@ -1454,7 +1418,6 @@
+         else if (hLower.includes("destination city")) destCity = val;
+       }
+ 
+-
+       // ----------------------------------------------------
+       // Update Pickup Sheet Logic
+       // ----------------------------------------------------
+@@ -1469,7 +1432,6 @@
+           }
+         }
+ 
+-
+         if (arrDetails && arrDetails.toLowerCase().includes("arriving by flight")) {
+           // They are arriving by flight - either update or append
+           let flightStatus = "Active";
+@@ -1512,14 +1474,12 @@
+                      .setFontColor("#666666"); // dark gray text
+         }
+ 
+-
+         if (pickupSheet.getLastRow() > 1) {
+            pickupSheet.getRange(2, 1, pickupSheet.getLastRow() - 1, pickupSheet.getLastColumn())
+                       .sort([{column: 9, ascending: true}, {column: 6, ascending: true}, {column: 7, ascending: true}]);
+         }
+       }
+ 
+-
+       // ----------------------------------------------------
+       // Update Drop-Off Sheet Logic
+       // ----------------------------------------------------
+@@ -1533,7 +1493,6 @@
+             break;
+           }
+         }
+-
+ 
+         if (depDetails && depDetails.toLowerCase().includes("departing by flight")) {
+           let flightStatus = "Active";
+@@ -1554,7 +1513,6 @@
+              }
+           }
+ 
+-
+           let updateData = hasDepDetails ? 
+               [firstName, lastName, emailRecipient, phone, depDetails, depDate, depTime, depCityOut, depAirline, depFlight, destCity, flightStatus] :
+               [firstName, lastName, emailRecipient, phone, depDate, depTime, depCityOut, depAirline, depFlight, destCity, flightStatus];
+@@ -1582,14 +1540,12 @@
+                      .setFontColor("#666666"); 
+         }
+ 
+-
+         if (dropoffSheet.getLastRow() > 1) {
+            dropoffSheet.getRange(2, 1, dropoffSheet.getLastRow() - 1, dropoffSheet.getLastColumn())
+                       .sort([{column: 8, ascending: true}, {column: 6, ascending: true}, {column: 7, ascending: true}]);
+         }
+       }
+ 
+-
+       // ----------------------------------------------------
+       // Update Logistics Sheet Logic
+       // ----------------------------------------------------
+@@ -1616,14 +1572,12 @@
+            }
+         }
+ 
+-
+         const newRowData = [];
+         let autoColCount = logHeaders.length;
+         if (logHeaders.includes("Room Assignment")) {
+            autoColCount = logHeaders.indexOf("Room Assignment");
+         }
+ 
+-
+         for (let i = 0; i < autoColCount; i++) {
+            const logHeader = logHeaders[i];
+            let mappedValue = "";
+@@ -1655,7 +1609,6 @@
+            newRowData.push(mappedValue);
+         }
+ 
+-
+         if (foundRowIndex !== -1) {
+            logisticsSheet.getRange(foundRowIndex, 1, 1, autoColCount).setValues([newRowData]);
+         } else {
+@@ -1663,19 +1616,16 @@
+            logisticsSheet.appendRow([...newRowData, ...blankPadding]);
+         }
+ 
+-
+         if (logisticsSheet.getLastRow() > 1) {
+            logisticsSheet.getRange(2, 1, logisticsSheet.getLastRow() - 1, logisticsSheet.getLastColumn())
+                          .sort([{column: 2, ascending: true}]);
+         }
+       }
+ 
+-
+     } catch(err) {
+       Logger.log("Error processing transportation/logistics sync: " + err.message);
+     }
+ 
+-
+     let isWaitlisted = false;
+     let maxAttendees = null;
+     try {
+@@ -1696,7 +1646,6 @@
+     } catch(err) {
+        Logger.log("Error checking waitlist: " + err.message);
+     }
+-
+ 
+     const row = e.range.getRow();
+     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+@@ -1723,26 +1672,22 @@
+       <p>However, because you selected <strong>'No'</strong> for the <em>Medical Consent and Liability Release</em>, we cannot process your registration at this time.</p>
+       <p>Participation requires a signed release for safety and insurance purposes. If this was a mistake, please resubmit the form or contact the coordinators.</p>`;
+ 
+-
+     const editNotice = isEdit ? `<p><em style="color: #e67e22;"><strong>Note:</strong> This is an update to your existing registration.</em></p>` : "";
+     const successContent = `
+       ${editNotice}
+-      <p>Hallelujah! This email confirms that we have successfully received your <strong>${settings.EventName}</strong>.</p>
++      <p>Hallelujah! This email confirms that we have successfully received your registration for the <strong>${settings.EventName}</strong>.</p>
+       <p>We look forward to seeing you! Keep an eye on your inbox for further updates regarding schedules and logistics.</p>`;
+ 
+-
+     const waitlistContent = `
+       <h2 style="color: #e67e22;">You're on the Waitlist</h2>
+       <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
+       <p>At this time, we have reached the maximum capacity of <strong>${maxAttendees}</strong> attendees for this event, so your registration has been placed on the waitlist.</p>
+       <p>If a spot opens up, the coordinators will contact you directly to confirm your attendance. Thank you for your patience and understanding!</p>`;
+ 
+-
+     let bodyContent = successContent;
+     if (isRejected) bodyContent = rejectionContent;
+     else if (isWaitlisted) bodyContent = waitlistContent;
+ 
+-
+     let form;
+     let editResponseUrl = "";
+     try {
+@@ -1783,14 +1728,12 @@
+        `;
+     }
+ 
+-
+     let responseSummaryHtml = editButtonHtml + `
+       <div style="margin-top: 30px; padding: 20px; background-color: #f9f9f9; border-left: 4px solid #2980b9; border-radius: 4px;">
+         <h3 style="margin-top: 0; color: #2c3e50; font-size: 16px;">Your Submission Details:</h3>
+         <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+     `;
+ 
+-
+     if (form) {
+       if (responses["Email Address"] && responses["Email Address"][0]) {
+         responseSummaryHtml += `
+@@ -1801,12 +1744,10 @@
+         `;
+       }
+ 
+-
+       const items = form.getItems();
+       let currentSectionTitle = "";
+       let currentSectionHelpText = "";
+ 
+-
+       items.forEach(item => {
+         const type = item.getType();
+         const title = item.getTitle();
+@@ -1834,7 +1775,6 @@
+               `;
+           }
+ 
+-
+           responseSummaryHtml += `
+             <tr>
+               <td style="padding: 8px 0; border-bottom: 1px solid #eaeaea; width: 45%; color: #7f8c8d; vertical-align: top; padding-right: 15px;"><strong>${safeHeader}</strong></td>
+@@ -1863,7 +1803,6 @@
+     
+     responseSummaryHtml += `</table></div>`;
+ 
+-
+     const htmlBody = `
+       <div ${commonStyles}>
+         ${logoHtml}
+@@ -1874,7 +1813,6 @@
+         ${signature}
+       </div>`;
+ 
+-
+     let statusText = "";
+     const timestamp = Utilities.formatDate(new Date(), "GMT-7", "MM/dd/yyyy HH:mm:ss");
+     
+@@ -1904,13 +1842,11 @@
+       statusText = isRejected ? `Rejected Sent [Fallback MailApp] (${timestamp})` : (isWaitlisted ? `Waitlist Sent [Fallback MailApp] (${timestamp})` : `Confirmation Sent [Fallback MailApp] (${timestamp})`);
+     }
+ 
+-
+     if (statusColIndex === 0) {
+       statusColIndex = headers.length + 1;
+       sheet.getRange(1, statusColIndex).setValue("Email Status").setFontWeight("bold");
+     }
+ 
+-
+     sheet.getRange(row, statusColIndex).setValue(statusText);
+     
+   } catch (error) {
+@@ -1918,22 +1854,18 @@
+   }
+ }
+ 
+-
+ function testEmailVersions() {
+   const testEmail = "david.liou@tjc.org";
+   const testName = "Test User";
+ 
+-
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   const settingsSheet = ss.getSheetByName("Settings");
+   if (!settingsSheet) throw new Error("Settings tab missing!");
+ 
+-
+   const settingsData = settingsSheet.getRange("A2:B4").getValues();
+   const settings = {};
+   settingsData.forEach(row => { settings[row[0]] = row[1]; });
+ 
+-
+   let logoBlob = null;
+   let logoHtml = "";
+   try {
+@@ -1943,10 +1875,8 @@
+     Logger.log("Could not load logo: " + e.message);
+   }
+ 
+-
+   const commonStyles = `style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50;"`;
+   const signature = `<p ${commonStyles}>In Christ,<br><span style="color: #2980b9; font-weight: bold;">${settings.OrgName}</span></p>`;
+-
+ 
+   const rejectionContent = `
+     <h2 style="color: #c0392b;">Registration Not Processed</h2>
+@@ -1954,19 +1884,16 @@
+     <p>However, because you selected <strong>'No'</strong> for the <u>Medical Consent and Liability Release</u>, we are unable to process your registration at this time.</p>
+     <p>For safety and insurance purposes, participation requires this signed release. If this was a mistake, please resubmit the form or contact the coordinators.</p>`;
+ 
+-
+   const successContent = `
+     <p>Hallelujah! This email confirms that we have successfully received your registration for the <strong>${settings.EventName}</strong>.</p>
+     <p>We look forward to seeing you! Keep an eye on your inbox for further updates regarding schedules and travel.</p>`;
+ 
+-
+   const waitlistContent = `
+     <h2 style="color: #e67e22;">You're on the Waitlist</h2>
+     <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
+     <p>At this time, we have reached the maximum capacity of attendees for this event, so your registration has been placed on the waitlist.</p>
+     <p>If a spot opens up, the coordinators will contact you directly to confirm your attendance. Thank you for your patience and understanding!</p>`;
+ 
+-
+   let successOptions = {
+     name: settings.OrgName,
+     htmlBody: `<div ${commonStyles}>${logoHtml}<p>Hi ${testName},</p>${successContent}<hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">${signature}</div>`
+@@ -1984,7 +1911,6 @@
+     MailApp.sendEmail(successOptions);
+   }
+ 
+-
+   let rejectionOptions = {
+     name: settings.OrgName,
+     htmlBody: `<div ${commonStyles}>${logoHtml}<p>Hi ${testName},</p>${rejectionContent}<hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">${signature}</div>`
+@@ -2002,11 +1928,9 @@
+     MailApp.sendEmail(rejectionOptions);
+   }
+ 
+-
+   Logger.log("Test emails sent to " + testEmail);
+ }
+ 
+-
+ function appendAuditLog(ss, payload, form, responseSs) {
+   try {
+     let logSheet = ss.getSheetByName("System Log");
+@@ -2031,7 +1955,6 @@
+       }
+     }
+ 
+-
+     const timestamp = Utilities.formatDate(new Date(), "GMT-7", "MM/dd/yyyy HH:mm:ss");
+     const coordinator = Session.getActiveUser().getEmail();
+     const templateName = payload.eventDetails.templateName || "Unknown Template";
+@@ -2040,7 +1963,6 @@
+     const sendAs = payload.eventDetails.contactEmail;
+     const fieldNames = payload.selectedFields.map(f => f.name).join(", ");
+ 
+-
+     const rowData = new Array(headers.length).fill("");
+     rowData[headers.indexOf("Timestamp")] = timestamp;
+     rowData[headers.indexOf("Template Name")] = templateName;
+@@ -2052,19 +1974,16 @@
+     rowData[headers.indexOf("Response Sheet URL")] = responseSs.getUrl();
+     rowData[headers.indexOf("Fields Included")] = fieldNames;
+ 
+-
+     logSheet.appendRow(rowData);
+   } catch(e) {
+     Logger.log("Failed to write to System Log: " + e.message);
+   }
+ }
+ 
+-
+ // =======================================================================
+ // SYSTEM MAINTENANCE
+ // =======================================================================
+ 
+-
+ function cleanupDeadTriggers() {
+   const ui = SpreadsheetApp.getUi();
+   const triggers = ScriptApp.getProjectTriggers();
+@@ -2090,7 +2009,6 @@
+     ui.ButtonSet.OK);
+ }
+ 
+-
+ function deleteAllTriggers() {
+   const ui = SpreadsheetApp.getUi();
+   const response = ui.alert('WARNING: Delete ALL Triggers?', 
+@@ -2099,7 +2017,6 @@
+     
+   if (response !== ui.Button.YES) return;
+ 
+-
+   const triggers = ScriptApp.getProjectTriggers();
+   for (let i = 0; i < triggers.length; i++) {
+     ScriptApp.deleteTrigger(triggers[i]);
+@@ -2108,12 +2025,10 @@
+   ui.alert('Success', `Deleted all ${triggers.length} triggers. You can now generate new forms.`, ui.ButtonSet.OK);
+ }
+ 
+-
+ // =======================================================================
+ // INITIAL SETUP FUNCTIONS
+ // =======================================================================
+ 
+-
+ function runSetup() {
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   const ui = SpreadsheetApp.getUi();
+@@ -2124,7 +2039,6 @@
+     
+   if (response !== ui.Button.YES) return;
+ 
+-
+   setupFieldDictionary(ss);
+   setupTemplates(ss);
+   setupAirportMapping(ss);
+@@ -2132,7 +2046,6 @@
+   ui.alert('Success', 'Configuration sheets have been successfully created!', ui.ButtonSet.OK);
+ }
+ 
+-
+ function setupAirportMapping(ss) {
+   let sheet = ss.getSheetByName('Airport Mapping');
+   if (!sheet) {
+@@ -2140,7 +2053,6 @@
+   }
+   sheet.clear();
+ 
+-
+   const data = [
+     ['Hosting Church', 'Airport 1', 'Airport 2', 'Airport 3', 'Airport 4', 'Airport 5', 'Region'],
+     ['Atlanta', 'ATL', '', '', '', '', 'East'],
+@@ -2180,14 +2092,12 @@
+     ['Washington DC', 'IAD', 'DCA', 'BWI', '', '', 'East']
+   ];
+ 
+-
+   sheet.getRange(1, 1, data.length, data[0].length).setValues(data);
+   sheet.getRange("A1:G1").setFontWeight("bold").setBackground("#d9ead3");
+   sheet.setFrozenRows(1);
+   sheet.autoResizeColumns(1, 7);
+ }
+ 
+-
+ function setupFieldDictionary(ss) {
+   let sheet = ss.getSheetByName('Field Dictionary');
+   if (!sheet) {
+@@ -2215,7 +2125,6 @@
+     ['Personal & Contact Info', 'My language preference', 'Checkboxes', true, 'English', 'Mandarin', 'Cantonese', 'Spanish', 'Japanese', 'Korean', 'French', 'German', 'Italian', 'Portuguese', 'Russian', 'Arabic', 'Hindi', 'Bengali', 'Thai', 'Vietnamese', 'Indonesian', 'Tagalog', 'Dutch', 'Polish', 'Turkish', 'Greek', 'Other'],
+     ['Personal & Contact Info', 'I am a baptized member of the True Jesus Church', 'Radio', true, 'Yes', 'No'],
+     ['Personal & Contact Info', 'I have received the Holy Spirit', 'Radio', true, 'Yes', 'No'],
+-
+ 
+     ['Personal & Contact Info', 'Class to attend', 'Radio', true, 'E2 (Grades 4 to 6)', 'J1 (Grades 7 to 9)', 'J2 (Grades 10 to 12)'],
+     ['Personal & Contact Info', 'Grade (As of September)', 'Short Answer Text', true],
+@@ -2232,7 +2141,7 @@
+     ['Event-Specific Participation', 'Are you in: College/Working', 'Checkboxes', true, 'College', 'Working', 'Other'],
+     ['Event-Specific Participation', 'What year are you in college?', 'Dropdown', true, 'Freshman', 'Sophomore', 'Junior', 'Senior', 'Graduate Student', 'Other'],
+     ['Event-Specific Participation', 'What is your current work status?', 'Checkboxes', true, 'Full-time', 'Part-time', 'Self-employed', 'Unemployed', 'Student'],
+-    ['Event-Specific Participation', 'Participant can help with the following', 'Checkboxes', false, 'Audio/Visual', 'Cleaning', 'Cooking', 'Hymn Leading', 'Interpretation (Chinese to English)', 'Interpretation (English to Chinese)', 'Pianist', 'Testimony', 'Other'],
++    ['Event-Specific Participation', 'Participant can help with the following', 'Checkboxes', false, 'Audio/Visual', 'Cleaning', 'Cooking', 'Hymn Leading', 'Interpretation', 'Pianist', 'Testimony', 'Other'],
+     ['Event-Specific Participation', 'Do you need someone to interpret for you in class?', 'Radio', false, 'Yes', 'No'],
+     ['Event-Specific Participation', 'Interpretation Language', 'Dropdown', false, 'English', 'Mandarin', 'Cantonese', 'Spanish', 'Japanese', 'Korean', 'French', 'German', 'Italian', 'Portuguese', 'Russian', 'Arabic', 'Hindi', 'Bengali', 'Thai', 'Vietnamese', 'Indonesian', 'Tagalog', 'Dutch', 'Polish', 'Turkish', 'Greek', 'Other'],
+     ['Event-Specific Participation', 'Have you led Bible study before?', 'Radio', false, 'Yes', 'No'],
+@@ -2255,24 +2164,20 @@
+     ['Event-Specific Participation', 'Completed ___ years of NATS', 'Dropdown', true, '0', '1', '2', '3', '4+'],
+     ['Event-Specific Participation', 'Class A/B preference', 'Radio', true, 'Class A', 'Class B'],
+ 
+-
+     ['Arrival Arrangements', 'Arrival Details', 'Multiple choice', true, 'I am arriving by car', 'I am arriving by flight', 'I do not need pickup'],
+     ['Arrival Arrangements', 'Arrival Date', 'Date', true],
+     ['Arrival Arrangements', 'Arrival Time', 'Time', true],
+ 
+-
+     ['Arrival Flight Details', 'Departing City/Airport', 'Short Answer Text', true],
+     ['Arrival Flight Details', 'Arrival City/Airport', 'Short Answer Text', true],
+     ['Arrival Flight Details', 'Arrival Airline', 'Short Answer Text', true],
+     ['Arrival Flight Details', 'Arrival Flight Number', 'Short Answer Text', true],
+     ['Arrival Flight Details', 'The individuals will be arriving on the same flight', 'Paragraph', false],
+ 
+-
+     ['Departure Arrangements', 'Departure Details', 'Multiple choice', true, 'I am departing by car', 'I am departing by flight', 'I do not need dropoff'],
+     ['Departure Arrangements', 'Departure Date', 'Date', true],
+     ['Departure Arrangements', 'Departure Time', 'Time', true],
+ 
+-
+     ['Departure Flight Details', 'Departure City/Airport', 'Short Answer Text', true],
+     ['Departure Flight Details', 'Destination City/Airport', 'Short Answer Text', true],
+     ['Departure Flight Details', 'Departure Airline', 'Short Answer Text', true],
+@@ -2288,7 +2193,6 @@
+     ['Other Travel Logistics', 'My train/bus information', 'Paragraph', false],
+     ['Other Travel Logistics', 'I will arrange my own ride (additional notes)', 'Paragraph', false],
+ 
+-
+     ['Lodging & Accommodation', 'I will be staying at the hosting church.', 'Radio', true, 'Yes', 'No'],
+     ['Lodging & Accommodation', 'Specify exact dates of arrival/departure for lodging', 'Paragraph', false],
+     ['Lodging & Accommodation', 'I need lodging before the event', 'Radio', true, 'Yes', 'No'],
+@@ -2300,7 +2204,6 @@
+     ['Lodging & Accommodation', 'If your need for lodging is not related to an event at the host church', 'Paragraph', false],
+     ['Lodging & Accommodation', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'Paragraph', false],
+ 
+-
+     ['Releases & Feedback', 'Medical Consent and Liability Release Consent', 'Radio', true, 'Yes', 'No'],
+     ['Releases & Feedback', 'General Media Release Consent', 'Radio', true, 'Yes', 'No'],
+     ['Releases & Feedback', 'Signature by Participant/Authorized Signatory', 'Short Answer Text', true],
+@@ -2328,7 +2231,6 @@
+   sheet.autoResizeColumns(1, 4);
+ }
+ 
+-
+ function setupTemplates(ss) {
+   let sheet = ss.getSheetByName('Templates');
+   if (!sheet) {
+@@ -2357,8 +2259,8 @@
+     ['National Church Conference (NCC)', 'First Name', 'Last Name', 'Local Church', 'Email', 'Phone', 'Gender', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event'],
+     ['Student Spiritual Convocation (SSC)', 'First Name', 'Last Name', 'Class to attend', 'Grade (As of September)', 'Gender', 'Local Church', 'Birth year', 'Age', 'Email', 'Minor\'s Email (at least 13 years of age)', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Emergency Contact Evening Phone', 'Participant can help with the following', 'Do you need someone to interpret for you in class?', 'Interpretation Language', 'Sleeping Bag/Pillow', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Dress Code Agreement', 'Name of Parent/Guardian (if Participant is under 18)', 'General Media Release Consent', 'Medical Consent and Liability Release Consent', 'Signature by Participant/Authorized Signatory'],
+     ['Young Adult Spiritual Convocation (YASC)', 'First Name', 'Last Name', 'Email', 'Minor\'s Email (at least 13 years of age)', 'Phone', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Are you in: College/Working', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'I will be staying at the hosting church.', 'Dress Code Agreement', 'Name of Parent/Guardian (if Participant is under 18)'],
+-    ['College Youth Spiritual Convocation (CYSC)', 'First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Dress Code Agreement', 'Name of Parent/Guardian (if Participant is under 18)', 'Have you led Bible study before?', 'Are you in: College/Working', 'What year are you in college?']
+-  ];
++    ['College Youth Spiritual Convocation (CYSC)', 'First Name', 'Last Name', 'Email', 'Minor\'s Email (at least 13 years of age)', 'Phone', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Dress Code Agreement', 'Name of Parent/Guardian (if Participant is under 18)']
++  ];;
+   
+   let maxCols = data[0].length;
+   templates.forEach(t => {
+@@ -2379,7 +2281,6 @@
+   sheet.autoResizeColumns(1, maxCols);
+ }
+ 
+-
+ function translateText(text, targetLanguages) {
+   if (!targetLanguages || targetLanguages.length === 0 || !text) return text;
+   
+@@ -2446,7 +2347,6 @@
+   return result;
+ }
+ 
+-
+ function runFieldAudit() {
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   const dictSheet = ss.getSheetByName('Field Dictionary');
+@@ -2588,8 +2488,6 @@
+   
+   SpreadsheetApp.getUi().alert(`Field Audit Complete!\n\nDiscovered ${newFieldKeys.length} new custom fields.\nThey have been logged in the "Pending Fields" tab for your review.`);
+ }
+-
+-
+ 
+ 
+ /**
+@@ -2601,7 +2499,6 @@
+   const now = new Date().getTime();
+   let changed = false;
+ 
+-
+   for (const formId in formsToMonitor) {
+     const config = formsToMonitor[formId];
+     try {
+@@ -2642,7 +2539,6 @@
+   }
+ }
+ 
+-
+ function parseLocalDate(dtString) {
+   if (!dtString) return null;
+   
+@@ -2665,15 +2561,12 @@
+   }
+   return null;
+ }
+-
+-
+ 
+ 
+ // ==========================================
+ // HISTORICAL FORMS AUDIT TOOL
+ // ==========================================
+ 
+-
+ function setupAuditSheet() {
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   let sheet = ss.getSheetByName('Historical Forms Audit');
+@@ -2698,7 +2591,6 @@
+   ss.setActiveSheet(sheet);
+ }
+ 
+-
+ function runAudit() {
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   const sheet = ss.getSheetByName('Historical Forms Audit');
+@@ -2737,7 +2629,6 @@
+   }
+ }
+ 
+-
+ function computeDiffRichText(baselineStr, extractedStr) {
+   const builder = SpreadsheetApp.newRichTextValue();
+   builder.setText(extractedStr);
+@@ -2780,12 +2671,10 @@
+   return builder.build();
+ }
+ 
+-
+ // ==========================================
+ // V2 UPGRADE TOOL
+ // ==========================================
+ 
+-
+ function upgradeExistingSheet() {
+   const ui = SpreadsheetApp.getUi();
+   const response = ui.prompt('Upgrade Existing Sheet', 'Paste the URL of the existing Event Responses Spreadsheet:', ui.ButtonSet.OK_CANCEL);
+@@ -2845,13 +2734,11 @@
+      return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("${name}*", 'Form Responses 1'!1:1, 0)), "${val}"), 0)`;
+   };
+ 
+-
+   // Helper for wildcard arrival/departure matching
+   const cTravelMatch = (type, mode) => {
+      return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("${type}*", 'Form Responses 1'!1:1, 0)), "*${mode}*"), COUNTIF('Form Responses 1'!1:1000, "*${type === 'Arrival' ? 'arriving' : 'departing'} by ${mode}*"))`;
+   };
+ 
+-
+   sumData.push(["Total Registrants", `="Total: " & COUNTA('Form Responses 1'!A2:A)`, "", ""]);
+   sumData.push(["", "", "", ""]);
+   
+@@ -2864,7 +2751,6 @@
+   sumData.push(["Does Not Need Drop-off", cCountIfs("Departure", "*need drop*"), "", ""]);
+   sumData.push(["", "", "", ""]);
+ 
+-
+   sumData.push(["Lodging Needs", "", "", ""]);
+     const cLodgingMatch = (mode) => {
+      if (mode === "Yes") {
+@@ -2874,14 +2760,12 @@
+      }
+   };
+ 
+-
+   sumData.push(["Staying at Hosting Church", cLodgingMatch("Yes"), "", ""]);
+   sumData.push(["Not Staying at Hosting Church", cLodgingMatch("No"), "", ""]);
+   sumData.push(["Lodging Before Event", cCountIfs("*lodging before*", "*Yes*"), "", ""]);
+   sumData.push(["Lodging After Event", cCountIfs("*lodging after*", "*Yes*"), "", ""]);
+   sumData.push(["", "", "", ""]);
+ 
+-
+   sumData.push(["Dietary & Medical", "", "", ""]);
+   const cNeedsMatch = (matcher) => {
+       const idx = `INDEX('Form Responses 1'!A2:ZZ1000, 0, MATCH("${matcher}", 'Form Responses 1'!1:1, 0))`;
+@@ -2891,7 +2775,6 @@
+   sumData.push(["Has Other Special Needs", cNeedsMatch("Other Special Needs*"), "", ""]);
+   sumData.push(["", "", "", ""]);
+ 
+-
+   sumData.push(["Demographics", "", "", ""]);
+   sumData.push(["Males", cCountIfs("Gender", "*Male*"), "", ""]);
+   sumData.push(["Females", cCountIfs("Gender", "*Female*"), "", ""]);
+@@ -2905,7 +2788,6 @@
+       });
+   }
+ 
+-
+   sumData.push(["", "", "", ""]);
+   
+   const prefs = ['Light sleeper (sensitive to noise/light)', 'Heavy sleeper', 'Early riser', 'Late sleeper', 'Snorer'];
+@@ -2922,7 +2804,6 @@
+      sumData.push([p, prefCountIfs(p, "Male"), prefCountIfs(p, "Female"), prefCountIfs(p, null)]);
+   });
+ 
+-
+   summarySheet.getRange(3, 1, sumData.length, 4).setValues(sumData);
+   summarySheet.getRange(3, 1, sumData.length, 1).setFontWeight("bold");
+   summarySheet.setColumnWidth(1, 300);
+@@ -2961,7 +2842,6 @@
+   dropoffSheet.setFrozenRows(1);
+   dropoffSheet.getRange(1, 1, dropoffSheet.getMaxRows(), dropoffSheet.getLastColumn()).createFilter();
+ 
+-
+   // 6. Create Logistics Sheet
+   const logisticsSheet = ss.insertSheet("Logistics");
+   
+@@ -2984,7 +2864,6 @@
+     "Emergency Contact Phone": "Emergency Contact Phone"
+   };
+ 
+-
+   if (selectedNames.some(n => n.includes("Local Church") || n.includes("What fellowship"))) {
+      logHeaders.push("Local Church/Place of Worship");
+   }
+@@ -3023,7 +2902,6 @@
+   }
+   logisticsSheet.getRange(1, 1, logisticsSheet.getMaxRows(), logHeaders.length).createFilter();
+ 
+-
+   // 7. Loop through all responses and run masterRespondToRegistration-style logic
+   const responseData = responsesSheet.getDataRange().getDisplayValues();
+   
+@@ -3038,7 +2916,6 @@
+       let lastName = "", phone = "", arrDetails = "", arrDate = "", arrTime = "", depCity = "", arrCity = "", arrAirline = "", arrFlight = "";
+       let depDetails = "", depDate = "", depTime = "", depCityOut = "", depAirline = "", depFlight = "", destCity = "";
+ 
+-
+       if (responses["Email Address"] && responses["Email Address"][0]) {
+         emailRecipient = responses["Email Address"][0];
+       }
+@@ -3135,9 +3012,5 @@
+      logisticsSheet.getRange(2, 1, logisticsSheet.getLastRow() - 1, logisticsSheet.getLastColumn()).sort([{column: 2, ascending: true}]);
+   }
+ 
+-
+   ui.alert('Success', 'Spreadsheet successfully upgraded to the new V2 format!', ui.ButtonSet.OK);
+ }
+-
+-
+-

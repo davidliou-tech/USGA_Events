@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 6px 8px;
+        color: #333;
+        box-sizing: border-box;
+      }
+      h2 {
+        font-size: 15px;
+        color: #1a73e8;
+        border-bottom: 1px solid #ddd;
+        padding-bottom: 4px;
+        margin-top: 5px;
+      }
+      .form-group {
+        margin-bottom: 12px;
+      }
+      label {
+        display: block;
+        font-weight: bold;
+        margin-bottom: 4px;
+        font-size: 12px;
+      }
+      input[type="text"], input[type="number"], select {
+        width: 100%;
+        padding: 5px 6px;
+        box-sizing: border-box;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      .field-category {
+        margin-top: 12px;
+        background: #f8f9fa;
+        padding: 8px 6px;
+        border-radius: 4px;
+        border: 1px solid #e8eaed;
+      }
+      .field-category h3 {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        color: #202124;
+      }
+      .field-item {
+        margin-bottom: 6px;
+        font-size: 12px;
+        line-height: 1.35;
+        display: flex;
+        align-items: flex-start;
+      }
+      .field-item input[type="checkbox"] {
+        margin-right: 6px;
+        margin-top: 2px;
+        flex-shrink: 0;
+      }
+      .field-item label {
+        margin-bottom: 0;
+        cursor: pointer;
+        flex: 1;
+        word-break: break-word;
+      }
+      .field-type-badge {
+        font-size: 10px;
+        color: #5f6368;
+        margin-left: 4px;
+        font-style: italic;
+        white-space: nowrap;
+      }
+      #status {
+        margin-top: 15px;
+        padding: 10px;
+        font-size: 13px;
+        display: none;
+        border-radius: 4px;
+      }
+      .success { background-color: #d4edda; color: #155724; }
+      .error { background-color: #f8d7da; color: #721c24; }
+      .loading { background-color: #fff3cd; color: #856404; }
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(133, 100, 4, 0.3);
+        border-radius: 50%;
+        border-top-color: #856404;
+        animation: spin 1s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-bottom: 10px;">
+      <h2 style="border-bottom: none; margin: 0; padding: 0;">USGA Form Generator</h2>
+      <button type="button" id="popOutBtn" onclick="google.script.run.showDialog()" style="background: #fff; border: 1px solid #1a73e8; color: #1a73e8; padding: 3px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: bold;" title="Open in a wider floating window">⤢ Pop Out</button>
+    </div>
+    
+    <div class="form-group">
+      <label for="templateSelect">Select Event Template</label>
+      <select id="templateSelect" onchange="onTemplateChange()">
+        <option value="">Loading templates...</option>
+      </select>
+    </div>
+
+    <h2>Event Details (Header)</h2>
+    <div class="form-group">
+      <label for="f_year">Event Year</label>
+      <input type="number" id="f_year" value="" min="2020" max="2100">
+    </div>
+    <div class="form-group" id="f_season_container" style="display: none;">
+      <label for="f_season">Season</label>
+      <select id="f_season">
+        <option value="">Select Season</option>
+        <option value="Spring">Spring</option>
+        <option value="Summer">Summer</option>
+        <option value="Fall">Fall</option>
+        <option value="Winter">Winter</option>
+      </select>
+    </div>
+    
+    <div class="form-group" id="f_region_container" style="display: none;">
+      <label for="f_region">Region</label>
+      <select id="f_region">
+        <option value="">Select Region</option>
+        <option value="Central Region">Central Region</option>
+        <option value="East Region">East Region</option>
+        <option value="Northwest Region">Northwest Region (NWR)</option>
+        <option value="Southwest Region">Southwest Region (SWR)</option>
+      </select>
+    </div>
+    
+    <div class="form-group" id="f_class_container" style="display: none;">
+      <label for="f_class">Class (SSC Only)</label>
+      <div style="font-size: 11px; color: #666; margin-bottom: 5px;">Hold Cmd/Ctrl to select multiple.</div>
+      <select id="f_class" multiple size="3" style="height: auto;">
+        <option value="E2">Elementary 2 (E2)</option>
+        <option value="J1">Junior 1 (J1)</option>
+        <option value="J2">Junior 2 (J2)</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label for="f_title">Form Title</label>
+      <input type="text" id="f_title" placeholder="e.g. NYF Registration">
+    </div>
+
+    <!-- NEW: Includes Minors Dropdown -->
+    <div class="form-group">
+      <label for="includesMinors">Will this event include participants who are minors (under 18)?</label>
+      <select id="includesMinors">
+        <option value="No">No, this event is for participants 18+</option>
+        <option value="Yes">Yes, this event includes participants who are minors (under 18)</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label for="f_theme">Theme</label>
+      <input type="text" id="f_theme">
+    </div>
+    <div class="form-group">
+      <label>Host Church / Location:</label>
+      <input type="text" id="f_host" value="" placeholder="e.g. True Jesus Church Elizabeth" oninput="updateAirportUI()">
+      <div style="font-size: 10px; color: #666; margin-top: 2px;">A Google Maps link will be automatically generated.</div>
+    </div>
+    <div class="form-group">
+      <label>Event Dates</label>
+      <div style="display: flex; gap: 10px;">
+        <div style="flex: 1;">
+          <div style="font-size: 10px; color: #666; margin-bottom: 2px;">Start Date & Time</div>
+          <input type="datetime-local" id="f_startDate" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
+        </div>
+        <div style="flex: 1;">
+          <div style="font-size: 10px; color: #666; margin-bottom: 2px;">End Date & Time</div>
+          <input type="datetime-local" id="f_endDate" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
+        </div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Airports</label>
+      <div>
+        <label style="display: inline; font-weight: normal; margin-right: 10px;"><input type="radio" name="t_airports" value="yes" onchange="toggleField('f_airports_container', true); updateAirportUI();"> Include</label>
+        <label style="display: inline; font-weight: normal;"><input type="radio" name="t_airports" value="no" onchange="toggleField('f_airports_container', false)" checked> Exclude</label>
+      </div>
+      <div id="f_airports_container" style="display: none; margin-top: 5px;">
+        <div style="font-size: 11px; color: #666; margin-bottom: 2px;">Preferred airport is: (e.g.: Los Angeles International Airport (LAX))</div>
+        <input type="text" id="f_airports_custom" value="" placeholder="Enter airport name">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Eligibility</label>
+      <div>
+        <label style="display: inline; font-weight: normal; margin-right: 10px;"><input type="radio" name="t_eligibility" value="yes" onchange="toggleField('f_eligibility_container', true)"> Include</label>
+        <label style="display: inline; font-weight: normal;"><input type="radio" name="t_eligibility" value="no" onchange="toggleField('f_eligibility_container', false)" checked> Exclude</label>
+      </div>
+      <div id="f_eligibility_container" style="display: none; margin-top: 5px;">
+        <input type="text" id="f_eligibility" placeholder="Enter eligibility info">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Fees</label>
+      <div>
+        <label style="display: inline; font-weight: normal; margin-right: 10px;"><input type="radio" name="t_fees" value="yes" onchange="toggleField('f_fees_container', true)"> Include</label>
+        <label style="display: inline; font-weight: normal;"><input type="radio" name="t_fees" value="no" onchange="toggleField('f_fees_container', false)" checked> Exclude</label>
+      </div>
+      <div id="f_fees_container" style="display: none; margin-top: 5px;">
+        <input type="text" id="f_fees" placeholder="Enter fee info">
+      </div>
+    </div>
+    
+    <h2>Registration Information</h2>
+    <div class="form-group">
+      <label for="f_regStartDate">Registration Start Date</label>
+      <input type="datetime-local" id="f_regStartDate" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
+      <div style="font-size: 10px; color: #666; margin-top: 2px;">Defaults to 12:01 AM of selected date.</div>
+    </div>
+    <div class="form-group">
+      <label for="f_regEndDate">Registration End Date (Deadline)</label>
+      <input type="datetime-local" id="f_regEndDate" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
+      <div style="font-size: 10px; color: #666; margin-top: 2px;">Defaults to 11:59 PM on the day before the event starts.</div>
+    </div>
+    <div class="form-group">
+      <label for="f_maxAttendees">Maximum Attendees</label>
+      <input type="number" id="f_maxAttendees" min="1" placeholder="Leave blank for no limit" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
+    </div>
+
+    <h2>Email Confirmation Settings</h2>
+    <div class="form-group">
+      <label for="f_orgname">Organization Name (Signature)</label>
+      <input type="text" id="f_orgname" value="USGA">
+    </div>
+    <div class="form-group">
+      <label for="f_contactemail">Send-As / Reply-To Email (Group Mailbox)</label>
+      <input type="text" id="f_contactemail" value="us.events@tjc.org">
+    </div>
+
+    <h2>Form Translation Settings</h2>
+    <div class="form-group">
+      <label>Are other languages needed for this form?</label>
+      <div>
+        <label style="display: inline; font-weight: normal; margin-right: 10px;"><input type="radio" name="t_translate" value="yes" onchange="toggleField('f_translate_container', true)"> Yes</label>
+        <label style="display: inline; font-weight: normal;"><input type="radio" name="t_translate" value="no" onchange="toggleField('f_translate_container', false)" checked> No</label>
+      </div>
+      <div id="f_translate_container" style="display: none; margin-top: 10px;">
+        <label>Select Target Languages:</label>
+        <div style="font-size: 11px; color: #5f6368; margin-bottom: 5px;">The form will automatically be appended with translations.</div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="zh-TW"> Traditional Chinese</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="zh-CN"> Simplified Chinese</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="ja"> Japanese</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="ko"> Korean</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="es"> Spanish</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="fr"> French</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="de"> German</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="it"> Italian</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="pt"> Portuguese</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="ru"> Russian</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="ar"> Arabic</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="hi"> Hindi</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="bn"> Bengali</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="th"> Thai</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="vi"> Vietnamese</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="id"> Indonesian</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="tl"> Tagalog</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="nl"> Dutch</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="pl"> Polish</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="tr"> Turkish</label>
+          <label style="font-weight: normal;"><input type="checkbox" class="lang-checkbox" value="el"> Greek</label>
+        </div>
+      </div>
+    </div>
+
+    <h2>Fields to Include</h2>
+    <p style="font-size: 11px; color: #5f6368; margin-bottom: 6px;">Check the fields you want. You can add custom fields after generation.</p>
+    <div style="margin-bottom: 8px;">
+      <input type="text" id="fieldSearch" placeholder="🔍 Filter fields (e.g. T-shirt, Language, Room)..." oninput="filterFields()" style="width: 100%; padding: 5px 8px; font-size: 12px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
+    </div>
+    <div id="fieldsContainer">
+      <!-- Dynamic checkboxes populated here -->
+    </div>
+
+    <div class="form-group" style="margin-top: 20px;">
+      <button class="action" id="generateBtn" onclick="generateForm()" disabled>Generate Form & Sheet</button>
+    </div>
+    
+    <div id="status"></div>
+
+    <script>
+      function toggleField(containerId, show) {
+        document.getElementById(containerId).style.display = show ? 'block' : 'none';
+      }
+
+      function updateAirportUI() {
+         const container = document.getElementById('f_airports_container');
+         if (container.style.display === 'none') return;
+         
+         const hostChurch = document.getElementById('f_host').value.trim();
+         const customInputElem = document.getElementById('f_airports_custom');
+         const prevCustom = customInputElem && customInputElem.tagName === 'INPUT' ? customInputElem.value : '';
+         
+         let matchedAirports = [];
+         for (let key in airportMapping) {
+            if (hostChurch.toLowerCase().includes(key.toLowerCase())) {
+               matchedAirports = airportMapping[key];
+               break;
+            }
+         }
+         
+         const airportFullNames = {
+            'ATL': 'Hartsfield-Jackson Atlanta International Airport (ATL)',
+            'AUS': 'Austin-Bergstrom International Airport (AUS)',
+            'BOS': 'Boston Logan International Airport (BOS)',
+            'BUR': 'Hollywood Burbank Airport (BUR)',
+            'BWI': 'Baltimore/Washington International Airport (BWI)',
+            'DAL': 'Dallas Love Field (DAL)',
+            'DCA': 'Ronald Reagan Washington National Airport (DCA)',
+            'DEN': 'Denver International Airport (DEN)',
+            'DFW': 'Dallas/Fort Worth International Airport (DFW)',
+            'EWR': 'Newark Liberty International Airport (EWR)',
+            'FLL': 'Fort Lauderdale-Hollywood International Airport (FLL)',
+            'HNL': 'Daniel K. Inouye International Airport (HNL)',
+            'HOU': 'William P. Hobby Airport (HOU)',
+            'IAD': 'Washington Dulles International Airport (IAD)',
+            'IAH': 'George Bush Intercontinental Airport (IAH)',
+            'JFK': 'John F. Kennedy International Airport (JFK)',
+            'LAS': 'Harry Reid International Airport (LAS)',
+            'LAX': 'Los Angeles International Airport (LAX)',
+            'LGB': 'Long Beach Airport (LGB)',
+            'LGA': 'LaGuardia Airport (LGA)',
+            'MCO': 'Orlando International Airport (MCO)',
+            'MDW': 'Chicago Midway International Airport (MDW)',
+            'MIA': 'Miami International Airport (MIA)',
+            'OAK': 'Oakland International Airport (OAK)',
+            'ONT': 'Ontario International Airport (ONT)',
+            'ORD': 'Chicago O\'Hare International Airport (ORD)',
+            'PDX': 'Portland International Airport (PDX)',
+            'PHL': 'Philadelphia International Airport (PHL)',
+            'PHX': 'Phoenix Sky Harbor International Airport (PHX)',
+            'RDU': 'Raleigh-Durham International Airport (RDU)',
+            'SAN': 'San Diego International Airport (SAN)',
+            'SEA': 'Seattle-Tacoma International Airport (SEA)',
+            'SFB': 'Orlando Sanford International Airport (SFB)',
+            'SFO': 'San Francisco International Airport (SFO)',
+            'SJC': 'Norman Y. Mineta San Jose International Airport (SJC)',
+            'SMF': 'Sacramento International Airport (SMF)',
+            'SNA': 'John Wayne Airport (SNA)',
+            'TPA': 'Tampa International Airport (TPA)',
+            'TTN': 'Trenton-Mercer Airport (TTN)'
+         };
+
+         if (matchedAirports.length > 0) {
+            let html = '<div style="font-size: 11px; color: #666; margin-bottom: 2px; font-weight: bold;">Select Preferred Airports:</div>';
+            matchedAirports.forEach(ap => {
+               const fullName = airportFullNames[ap] || ap;
+               html += `<label style="display:block; font-weight:normal; margin-bottom:2px;"><input type="checkbox" class="airport-checkbox" value="${fullName}"> ${fullName}</label>`;
+            });
+            html += `<div style="font-size: 11px; color: #666; margin-top: 5px; margin-bottom: 2px;">Other / Custom Airport:</div>`;
+            html += `<input type="text" id="f_airports_custom" value="${prevCustom.replace(/"/g, '&quot;')}" placeholder="e.g. SFO">`;
+            container.innerHTML = html;
+         } else {
+            container.innerHTML = `
+              <div style="font-size: 11px; color: #666; margin-bottom: 2px;">Preferred airport is: (e.g.: Los Angeles International Airport (LAX))</div>
+              <input type="text" id="f_airports_custom" value="${prevCustom.replace(/"/g, '&quot;')}" placeholder="Enter airport name">
+            `;
+         }
+      }
+
+      function getSelectedAirports() {
+         const cbs = document.querySelectorAll('.airport-checkbox:checked');
+         const customInput = document.getElementById('f_airports_custom');
+         const custom = customInput && customInput.tagName === 'INPUT' ? customInput.value.trim() : '';
+         let selected = Array.from(cbs).map(cb => cb.value);
+         if (custom) selected.push(custom);
+         return selected.join(', ');
+      }
+
+      let masterDictionary = [];
+      let masterTemplates = [];
+      let airportMapping = {};
+
+      document.getElementById('f_year').addEventListener('input', updateTitlePreview);
+      document.getElementById('f_season').addEventListener('change', updateTitlePreview);
+      document.getElementById('f_region').addEventListener('change', updateTitlePreview);
+      document.getElementById('f_class').addEventListener('change', updateTitlePreview);
+
+      // Run on load
+      google.script.run
+        .withSuccessHandler(initData)
+        .withFailureHandler(function(err) {
+          const status = document.getElementById('status');
+          status.className = 'error';
+          status.innerHTML = '<strong>Error loading configuration:</strong> ' + err.message + '<br>Please ensure you have run "Setup Initial Configuration" from the USGA Events menu.';
+          status.style.display = 'block';
+          document.getElementById('templateSelect').innerHTML = '<option value="">Error loading templates</option>';
+        })
+        .getConfigData();
+
+      // Hide pop-out button if opened in wide modal dialog
+      if (window.innerWidth > 400) {
+        const popBtn = document.getElementById('popOutBtn');
+        if (popBtn) popBtn.style.display = 'none';
+      }
+
+      // Auto-fill year
+      document.getElementById('f_year').value = new Date().getFullYear();
+
+      // Dynamic Date Defaults & Auto-Time Logic
+      const regStartInput = document.getElementById('f_regStartDate');
+      const regEndInput = document.getElementById('f_regEndDate');
+
+      function getDayBeforeEventDate() {
+        const startVal = document.getElementById('f_startDate').value;
+        if (!startVal) return '';
+        const datePart = startVal.split('T')[0];
+        const [y, m, d] = datePart.split('-').map(Number);
+        const dt = new Date(y, m - 1, d);
+        dt.setDate(dt.getDate() - 1);
+        const pad = n => String(n).padStart(2, '0');
+        return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T23:59`;
+      }
+
+      ['change', 'input'].forEach(evt => {
+        document.getElementById('f_startDate').addEventListener(evt, function(e) {
+          const endDateInput = document.getElementById('f_endDate');
+          endDateInput.min = e.target.value;
+          if (!endDateInput.value || endDateInput.value < e.target.value) {
+            endDateInput.value = e.target.value;
+          }
+
+          // When event start date is set/changed, default registration end date to 11:59 PM on the day before
+          const dayBefore = getDayBeforeEventDate();
+          if (dayBefore && (!regEndInput.value || regEndInput.dataset.autoFilled === 'true')) {
+            regEndInput.value = dayBefore;
+            regEndInput.dataset.autoFilled = 'true';
+          }
+        });
+        
+        regStartInput.addEventListener(evt, function(e) {
+          if (e.target.value) {
+            regEndInput.min = e.target.value;
+            if (!regEndInput.value || regEndInput.dataset.autoFilled === 'true') {
+              const dayBefore = getDayBeforeEventDate();
+              if (dayBefore && dayBefore >= e.target.value) {
+                regEndInput.value = dayBefore;
+                regEndInput.dataset.autoFilled = 'true';
+              } else {
+                const startDatePart = e.target.value.split('T')[0];
+                regEndInput.value = startDatePart + 'T23:59';
+                regEndInput.dataset.autoFilled = 'true';
+              }
+            }
+          }
+        });
+      });
+
+      // Mark regEndInput as custom if manually modified by user
+      regEndInput.addEventListener('input', function() {
+        regEndInput.dataset.autoFilled = 'false';
+      });
+
+      // Default Start Time to 12:01 AM (00:01)
+      regStartInput.addEventListener('change', function() {
+        if (this.value) {
+          const parts = this.value.split('T');
+          if (!parts[1] || parts[1] === '00:00') {
+            this.value = parts[0] + 'T00:01';
+          }
+        }
+      });
+
+      // Default End Time to 11:59 PM (23:59)
+      regEndInput.addEventListener('change', function() {
+        if (this.value) {
+          const parts = this.value.split('T');
+          if (!parts[1] || parts[1] === '00:00') {
+            this.value = parts[0] + 'T23:59';
+          }
+        }
+      });
+
+      let userEditedTitle = false;
+      document.getElementById('f_title').addEventListener('input', function() { userEditedTitle = true; });
+
+      function updateTitlePreview() {
+        if (userEditedTitle) return;
+        
+        const selected = document.getElementById('templateSelect').value;
+        const titleInput = document.getElementById('f_title');
+        
+        if (!selected || selected === '_BLANK_') return;
+
+        let baseTitle = selected + ' Registration';
+        let finalTitle = baseTitle;
+        
+        const year = document.getElementById('f_year').value;
+
+        const regionalEvents = ['SSC', 'YASC', 'CYSC', 'SMC', 'Student Spiritual Convocation', 'Young Adult Spiritual Convocation', 'College Youth Spiritual Convocation', 'Sacred Music Camp'];
+        if (regionalEvents.some(t => selected.includes(t))) {
+           const region = document.getElementById('f_region').value;
+           const season = document.getElementById('f_season').value;
+           
+           let prefixParts = [];
+           if (region) prefixParts.push(region);
+           if (season) prefixParts.push(season);
+           if (year) prefixParts.push(year);
+           
+           if (selected.includes('SSC') || selected.includes('Student Spiritual Convocation')) {
+              const classSelect = document.getElementById('f_class');
+              const selectedClasses = Array.from(classSelect.selectedOptions).map(opt => opt.value);
+              if (selectedClasses.length > 0) {
+                 prefixParts.push(selectedClasses.join('/'));
+              }
+           }
+           
+           if (prefixParts.length > 0) {
+              finalTitle = prefixParts.join(' ') + ' ' + baseTitle; 
+           }
+        } else {
+           if (year) {
+              finalTitle = year + ' ' + baseTitle;
+           }
+        }
+        
+        titleInput.value = finalTitle;
+      }
+
+      let historicalMemory = {};
+      
+      function initData(data) {
+        masterDictionary = data.dictionary;
+        masterTemplates = data.templates;
+        airportMapping = data.airportMapping || {};
+        historicalMemory = data.history || {};
+        
+        const select = document.getElementById('templateSelect');
+        select.innerHTML = '<option value="">-- Choose Template --</option>';
+        
+        // Add "Create Blank Event" option
+        select.innerHTML += '<option value="_BLANK_">Create Custom Event (Blank)</option>';
+
+        masterTemplates.forEach(t => {
+          let opt = document.createElement('option');
+          opt.value = t.name;
+          opt.text = t.name;
+          select.appendChild(opt);
+        });
+
+        document.getElementById('generateBtn').disabled = false;
+      }
+
+      function onTemplateChange() {
+        userEditedTitle = false;
+        const selected = document.getElementById('templateSelect').value;
+        const container = document.getElementById('fieldsContainer');
+        container.innerHTML = '';
+        
+        const regionContainer = document.getElementById('f_region_container');
+        const seasonContainer = document.getElementById('f_season_container');
+        const classContainer = document.getElementById('f_class_container');
+        const regionalEvents = ['SSC', 'YASC', 'CYSC', 'SMC', 'Student Spiritual Convocation', 'Young Adult Spiritual Convocation', 'College Youth Spiritual Convocation', 'Sacred Music Camp'];
+        if (regionalEvents.some(t => selected.includes(t))) {
+           regionContainer.style.display = 'block';
+           seasonContainer.style.display = 'block';
+        } else {
+           regionContainer.style.display = 'none';
+           seasonContainer.style.display = 'none';
+           document.getElementById('f_season').value = "";
+           document.getElementById('f_region').value = "";
+        }
+        
+        if (selected.includes('SSC') || selected.includes('Student Spiritual Convocation')) {
+           classContainer.style.display = 'block';
+        } else {
+           classContainer.style.display = 'none';
+           document.getElementById('f_class').selectedIndex = -1;
+        }
+
+        // --- MINOR PRESET LOGIC ---
+        const minorTemplates = ['SSC', 'CYSC', 'YASC', 'SMC', 'MMP', 'NYTS', 'MVP Workshop'];
+        if (minorTemplates.some(t => selected.includes(t))) {
+          document.getElementById('includesMinors').value = "Yes";
+        } else {
+          document.getElementById('includesMinors').value = "No";
+        }
+        // --------------------------
+
+        // --- NCC ELIGIBILITY LOGIC ---
+        if (selected.includes('NCC') || selected.includes('National Church Conference')) {
+          document.querySelector('input[name="t_eligibility"][value="yes"]').checked = true;
+          document.getElementById('f_eligibility_container').style.display = 'block';
+          document.getElementById('f_eligibility').value = "This is not an open conference and pertains only to elected delegates and invited observers.";
+        } else {
+          document.querySelector('input[name="t_eligibility"][value="no"]').checked = true;
+          document.getElementById('f_eligibility_container').style.display = 'none';
+          document.getElementById('f_eligibility').value = "";
+        }
+        // --------------------------
+
+        updateTitlePreview();
+
+        if (!selected) return;
+
+
+        let fieldsToRender = [...masterDictionary]; // Show full dictionary by default so all optional fields are available
+        let checkedFieldNames = [];
+
+        if (selected !== '_BLANK_') {
+          // Find template and note which fields should be checked
+          const tmpl = masterTemplates.find(t => t.name === selected);
+          if (tmpl) {
+             checkedFieldNames = tmpl.fields || [];
+             
+             // If the template contains a custom field not in the dictionary, append it to be rendered
+             tmpl.fields.forEach(fieldName => {
+                if (!fieldsToRender.find(d => d.name === fieldName)) {
+                   fieldsToRender.push({ category: 'Custom', name: fieldName, type: 'Text', required: false });
+                }
+             });
+          }
+        }
+
+        // Always include all Release & Feedback fields regardless of template, forcing them checked
+        const releaseFields = masterDictionary.filter(d => d.category === 'Releases & Feedback');
+        releaseFields.forEach(rf => {
+          if (!checkedFieldNames.includes(rf.name)) {
+            checkedFieldNames.push(rf.name);
+          }
+        });
+
+        // Render the full list, checking preset fields and leaving optional fields unchecked
+        renderFields(fieldsToRender, checkedFieldNames);
+      }
+
+      function toggleCategory(btnElem, check) {
+        const catDiv = btnElem.closest('.field-category');
+        if (!catDiv) return;
+        const cbs = catDiv.querySelectorAll('.field-checkbox:not(:disabled)');
+        cbs.forEach(cb => { cb.checked = check; });
+      }
+
+      function filterFields() {
+        const q = (document.getElementById('fieldSearch').value || '').toLowerCase().trim();
+        const categories = document.querySelectorAll('.field-category');
+        categories.forEach(catDiv => {
+          const items = catDiv.querySelectorAll('.field-item');
+          let visibleCount = 0;
+          items.forEach(item => {
+            const txt = item.textContent.toLowerCase();
+            if (!q || txt.includes(q)) {
+              item.style.display = 'flex';
+              visibleCount++;
+            } else {
+              item.style.display = 'none';
+            }
+          });
+          catDiv.style.display = (visibleCount > 0 || !q) ? 'block' : 'none';
+        });
+      }
+
+      function renderFields(fields, checkedFieldNames) {
+        const container = document.getElementById('fieldsContainer');
+        container.innerHTML = '';
+        const byCategory = {};
+
+        fields.forEach(f => {
+          if (!byCategory[f.category]) byCategory[f.category] = [];
+          byCategory[f.category].push(f);
+        });
+
+        for (let cat in byCategory) {
+          const catDiv = document.createElement('div');
+          catDiv.className = 'field-category';
+          const isReleaseCat = cat === 'Releases & Feedback';
+          
+          let headerHtml = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <h3 style="margin: 0; font-size: 13px; color: #202124;">${cat}</h3>
+              ${!isReleaseCat ? `
+                <span style="font-size: 11px;">
+                  <a href="javascript:void(0)" onclick="toggleCategory(this, true)" style="color: #1a73e8; text-decoration: none; margin-right: 4px; font-weight: bold;">Select All</a> |
+                  <a href="javascript:void(0)" onclick="toggleCategory(this, false)" style="color: #1a73e8; text-decoration: none; margin-left: 4px;">Clear</a>
+                </span>
+              ` : ''}
+            </div>
+          `;
+          catDiv.innerHTML = headerHtml;
+          
+          byCategory[cat].forEach(field => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'field-item';
+            
+            // Check if this field should be checked based on the template
+            const isRelease = field.category === 'Releases & Feedback';
+            const shouldCheck = isRelease || checkedFieldNames.includes(field.name);
+            const disabled = isRelease ? 'disabled' : ''; // Lock releases
+
+            itemDiv.innerHTML = `
+              <input type="checkbox" class="field-checkbox" value="${field.name.replace(/"/g, '&quot;')}" ${shouldCheck ? 'checked' : ''} ${disabled}>
+              <label style="font-weight:normal;">${field.name} <span class="field-type-badge">(${field.type})</span></label>
+            `;
+            catDiv.appendChild(itemDiv);
+          });
+
+          container.appendChild(catDiv);
+        }
+        
+        // Re-apply filter if user was searching
+        filterFields();
+      }
+
+      function generateForm() {
+        const btn = document.getElementById('generateBtn');
+        const status = document.getElementById('status');
+        const title = document.getElementById('f_title').value;
+        const template = document.getElementById('templateSelect').value;
+
+        if (!template) {
+          alert('Please select an Event Template (or choose "Create Custom Event (Blank)").');
+          return;
+        }
+
+        if (!title) {
+          alert('Please enter a Form Title');
+          return;
+        }
+
+        btn.disabled = true;
+        status.className = 'loading';
+        status.innerHTML = '<span class="spinner"></span> <strong>Generating Form & Linked Sheets...</strong><br><span style="font-size:11px; color:#555;">Creating form, branching travel logistics, and setting up dashboard. Please wait (~15-30 seconds).</span>';
+        status.style.display = 'block';
+
+        const regionSelect = document.getElementById('f_region');
+        const region = (regionSelect && regionSelect.parentElement.style.display !== 'none') ? regionSelect.value : '';
+
+        const seasonSelect = document.getElementById('f_season');
+        const season = (seasonSelect && seasonSelect.parentElement.style.display !== 'none') ? seasonSelect.value : '';
+
+        const classSelect = document.getElementById('f_class');
+        const classes = (classSelect && classSelect.parentElement.style.display !== 'none') ? Array.from(classSelect.selectedOptions).map(opt => opt.value) : [];
+
+        // Gather event details
+        const eventDetails = {
+          year: document.getElementById('f_year').value,
+          title: title,
+          region: region,
+          season: season,
+          classes: classes,
+          templateName: document.getElementById('templateSelect').value,
+          includesMinors: (document.getElementById('includesMinors').value === "Yes"), // NEW: Capture the Minors toggle
+          theme: document.getElementById('f_theme').value,
+          host: document.getElementById('f_host').value,
+          startDate: document.getElementById('f_startDate').value,
+          endDate: document.getElementById('f_endDate').value,
+          airports: document.querySelector('input[name="t_airports"]:checked').value === 'yes' ? getSelectedAirports() : '',
+          eligibility: document.querySelector('input[name="t_eligibility"]:checked').value === 'yes' ? document.getElementById('f_eligibility').value : '',
+          fees: document.querySelector('input[name="t_fees"]:checked').value === 'yes' ? document.getElementById('f_fees').value : '',
+          regStartDate: (function() {
+            let val = document.getElementById('f_regStartDate') ? document.getElementById('f_regStartDate').value : '';
+            if (val && !val.includes('T')) val += 'T00:01';
+            else if (val && val.endsWith('T00:00')) val = val.replace('T00:00', 'T00:01');
+            return val;
+          })(),
+          regEndDate: (function() {
+            let val = document.getElementById('f_regEndDate') ? document.getElementById('f_regEndDate').value : '';
+            if (val && !val.includes('T')) val += 'T23:59';
+            else if (val && val.endsWith('T00:00')) val = val.replace('T00:00', 'T23:59');
+            return val;
+          })(),
+          regStartTimestamp: (function() {
+            let val = document.getElementById('f_regStartDate') ? document.getElementById('f_regStartDate').value : '';
+            if (!val) return null;
+            if (!val.includes('T')) val += 'T00:01';
+            else if (val.endsWith('T00:00')) val = val.replace('T00:00', 'T00:01');
+            const d = new Date(val);
+            return !isNaN(d.getTime()) ? d.getTime() : null;
+          })(),
+          regEndTimestamp: (function() {
+            let val = document.getElementById('f_regEndDate') ? document.getElementById('f_regEndDate').value : '';
+            if (!val) return null;
+            if (!val.includes('T')) val += 'T23:59';
+            else if (val.endsWith('T00:00')) val = val.replace('T00:00', 'T23:59');
+            const d = new Date(val);
+            return !isNaN(d.getTime()) ? d.getTime() : null;
+          })(),
+          userTimeZone: (function() {
+            try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(e) { return ''; }
+          })(),
+          maxAttendees: document.getElementById('f_maxAttendees') ? document.getElementById('f_maxAttendees').value : '',
+          orgName: document.getElementById('f_orgname').value,
+          contactEmail: document.getElementById('f_contactemail').value
+        };
+
+        // Gather selected fields
+        const checkboxes = document.querySelectorAll('.field-checkbox');
+        const selectedFields = [];
+        checkboxes.forEach(cb => {
+          if (cb.checked) {
+            const foundField = masterDictionary.find(d => d.name === cb.value);
+            if (foundField) {
+               selectedFields.push(foundField);
+            } else {
+               // Fallback if custom field was added
+               selectedFields.push({ category: 'Custom', name: cb.value, type: 'Text', required: false });
+            }
+          }
+        });
+
+        // Gather translation languages
+        const langCheckboxes = document.querySelectorAll('.lang-checkbox');
+        const selectedLanguages = [];
+        if (document.querySelector('input[name="t_translate"]:checked').value === 'yes') {
+          langCheckboxes.forEach(cb => {
+            if (cb.checked) {
+              selectedLanguages.push(cb.value);
+            }
+          });
+        }
+
+        const payload = {
+          eventDetails: eventDetails,
+          selectedFields: selectedFields,
+          languages: selectedLanguages
+        };
+
+        google.script.run
+          .withSuccessHandler(onSuccess)
+          .withFailureHandler(onError)
+          .generateForm(payload);
+      }
+
+      function onSuccess(response) {
+        const status = document.getElementById('status');
+        status.className = 'success';
+        status.innerHTML = `
+          <strong>Success!</strong><br>
+          <a href="${response.publishedUrl}" target="_blank">Responder Link (Live Form)</a><br>
+          <a href="${response.editUrl}" target="_blank">Edit Form</a><br>
+          <a href="${response.sheetUrl}" target="_blank">View Response Sheet</a>
+        `;
+        document.getElementById('generateBtn').disabled = false;
+      }
+
+      function onError(error) {
+        const status = document.getElementById('status');
+        status.className = 'error';
+        status.innerHTML = `<strong>Error:</strong> ${error.message}`;
+        document.getElementById('generateBtn').disabled = false;
+      }
+    </script>
+  </body>
+</html>

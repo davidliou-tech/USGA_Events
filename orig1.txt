@@ -1,0 +1,70 @@
+  const sumData = [];
+  
+  sumData.push(["Total Registrants", `="Total: " & IF(Participants!A2="No responses yet", 0, COUNTA(Participants!A2:A))`]);
+  sumData.push(["", ""]);
+  
+  sumData.push(["Travel Logistics", ""]);
+  sumData.push(["Arriving by Flight", `=COUNTIF('Form Responses 1'!1:1000, "*arriving by flight*")`]);
+  sumData.push(["Arriving by Car", `=COUNTIF('Form Responses 1'!1:1000, "*arriving by car*")`]);
+  sumData.push(["Departing by Flight", `=COUNTIF('Form Responses 1'!1:1000, "*departing by flight*")`]);
+  sumData.push(["Departing by Car", `=COUNTIF('Form Responses 1'!1:1000, "*departing by car*")`]);
+  sumData.push(["", ""]);
+
+  const cCountIfs = (name, val) => {
+     return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("${name}*", 'Form Responses 1'!1:1, 0)), "${val}"), 0)`;
+  };
+
+  sumData.push(["Lodging Needs", ""]);
+  sumData.push(["Staying at Hosting Church", cCountIfs("I will be staying at the hosting church", "Yes")]);
+  sumData.push(["Lodging Before Event", cCountIfs("I need lodging before the event", "Yes")]);
+  sumData.push(["Lodging After Event", cCountIfs("I need lodging after the event", "Yes")]);
+  sumData.push(["", ""]);
+
+  sumData.push(["Dietary & Medical", ""]);
+  sumData.push(["Has Food/Medicine Restrictions", `=IFERROR(COUNTIFS(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Food/Medicine*", 'Form Responses 1'!1:1, 0)), "<>", INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Food/Medicine*", 'Form Responses 1'!1:1, 0)), "<>Food/Medicine Restrictions"), 0)`]);
+  sumData.push(["Has Other Special Needs", `=IFERROR(COUNTIFS(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Other Special Needs*", 'Form Responses 1'!1:1, 0)), "<>", INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Other Special Needs*", 'Form Responses 1'!1:1, 0)), "<>Other Special Needs/Accommodations (e.g., mobility assistance)"), 0)`]);
+  sumData.push(["", ""]);
+
+  sumData.push(["Demographics", ""]);
+  sumData.push(["Males", cCountIfs("Gender", "Male")]);
+  sumData.push(["Females", cCountIfs("Gender", "Female")]);
+  
+  if (selectedNames.some(n => n.includes("My current age group"))) {
+      sumData.push(["", ""]);
+      sumData.push(["Age Groups", ""]);
+      const ageGroups = ['12-14', '15-18', '19-25', '26-35', '36-50', '51+'];
+      ageGroups.forEach(ag => {
+         sumData.push([ag, cCountIfs("My current age group", ag)]);
+      });
+  }
+
+  sumData.push(["", ""]);
+  sumData.push(["Sleep Preferences", ""]);
+  const prefs = ['Light sleeper (sensitive to noise/light)', 'Heavy sleeper', 'Early riser', 'Night owl', 'Snorer'];
+  const prefCountIfs = (pref, gender) => {
+     if (gender) {
+        return `=IFERROR(COUNTIFS(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Sleep Preferences*", 'Form Responses 1'!1:1, 0)), "*${pref}*", INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Gender*", 'Form Responses 1'!1:1, 0)), "${gender}"), 0)`;
+     } else {
+        return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Sleep Preferences*", 'Form Responses 1'!1:1, 0)), "*${pref}*"), 0)`;
+     }
+  };
+  
+  const hasGender = selectedNames.some(n => n === "Gender");
+  
+  if (hasGender) {
+      prefs.forEach(p => {
+         sumData.push([p + " (Male)", prefCountIfs(p, "Male")]);
+         sumData.push([p + " (Female)", prefCountIfs(p, "Female")]);
+      });
+  } else {
+      prefs.forEach(p => {
+         sumData.push([p, prefCountIfs(p, null)]);
+      });
+  }
+
+  summarySheet.getRange(3, 1, sumData.length, 2).setValues(sumData);
+  summarySheet.getRange(3, 1, sumData.length, 1).setFontWeight("bold");
+  summarySheet.setColumnWidth(1, 300);
+  summarySheet.setColumnWidth(2, 100);
+  
+  for(let i=0; i<sumData.length; i++) {
