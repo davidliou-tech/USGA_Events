@@ -40,7 +40,7 @@ Several fields trigger custom validation rules, instructional guidance, or dynam
 * **Ordering:** Automatically injected into `Personal & Contact Info` directly before `Class to attend` or `Grade`.
 
 ### Parent/Guardian Information (`Name of Parent/Guardian...`)
-* **Help Text:** Automatically accompanied by instructions: *"If participant is 18 or over, enter 'N/A'."*
+* **Help Text:** Automatically accompanied by instructions: *"If participant is 18 or above, enter 'N/A'."*
 * **Behavior:** Mandated for minor-inclusive events; automatically stripped from adult-only events.
 
 ### Minor's Email (`Minor's Email (at least 13 years of age)`)

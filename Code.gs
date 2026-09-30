@@ -1624,7 +1624,7 @@ function addFieldToForm(form, field, payload) {
 
   if (field.name.includes('Parent/Guardian') && !field.name.includes('Signature')) {
     item = form.addTextItem().setTitle(t(field.name));
-    item.setHelpText(t("If participant is 18 or over, enter 'N/A'."));
+    item.setHelpText(t("If participant is 18 or above, enter 'N/A'."));
     item.setRequired(true);
     return item;
   }
@@ -3209,6 +3209,7 @@ function translateText(text, targetLanguages) {
       'Other Special Needs/Accommodations (e.g., mobility assistance)': '其他活動期間之特殊需求或協助事項 (例如：行動輔助)',
       'Age': '年齡',
       'Name of Parent/Guardian (if Participant is under 18)': '家長/監護人姓名（若參加者未滿18歲）',
+      "If participant is 18 or above, enter 'N/A'.": '若參加者年滿 18 歲以上，請填寫「N/A」。',
       "If participant is 18 or over, enter 'N/A'.": '若參加者年滿 18 歲以上，請填寫「N/A」。',
       "If participant is over 18, enter 'N/A'.": '若參加者年滿 18 歲以上，請填寫「N/A」。',
       'If participant is over 18, submit N/A.': '若參加者年滿 18 歲以上，請填寫「N/A」。',
