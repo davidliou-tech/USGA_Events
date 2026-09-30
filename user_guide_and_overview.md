@@ -72,6 +72,7 @@ You can manage your event at any time after generation by clicking **USGA Events
   * 🟢 **OPEN:** Registration is live and accepting submissions.
   * 🟡 **SCHEDULED:** Registration is configured and will open automatically on your scheduled start date.
   * 🔴 **CLOSED:** Registration has closed or reached maximum capacity.
+* **Sync Missing Events:** If an event previously created does not appear in your dropdown list, click **🔄 Sync Events** at the top of the sidebar (or run **USGA Events > Advanced Maintenance > Sync Active Events from System Log**).
 * **Quick Links:** Open the Live Form, Edit Form, or Response Sheet with a single click.
 * **Update Deadlines or Capacity Caps:** Modify the event dates, registration window, or attendee limit, then click **Save Changes**.
 * **Manually Open or Close:** Click **Open Form Now** to open registration early, or **Force Close Form** to stop accepting submissions immediately.

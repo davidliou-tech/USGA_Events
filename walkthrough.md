@@ -53,6 +53,12 @@ This document details the feature implementation, architectural refactoring, and
 * **Automated Scoped Permissions:** The backend automatically adds `coordinatorEmail` and `contactEmail` as **Editors** to the new subfolder, Google Form, and Response Sheet, providing full event management rights without requiring elevated drive-wide roles.
 * **Drive Folder Navigation & Audit Log:** Renders a clickable `📁 View Event Drive Folder` link in the success modal and automatically writes the folder URL into Column I of `System Log`.
 
+### 9. Active Event Management Performance & System Log Sync (V2.9.2)
+* **High-Speed Asynchronous Loading (<0.5s):** Replaced sequential synchronous network calls (`FormApp.openById`, `SpreadsheetApp.openById`, `form.getResponses()`) on sidebar load with cached metadata. Live status and registrant counts load on demand for the selected event.
+* **System Log Discovery & 1-Click Sync:** Added `syncActiveEventsFromSystemLog()` to discover all active and historical events from the `System Log` sheet and register them into `FormsToMonitor`. Accessible via the `🔄 Sync Events` link in the sidebar and `USGA Events > Advanced Maintenance > Sync Active Events from System Log` in the menu.
+* **Safe Lifecycle Control:** Changed `masterFormLifecycleCron` to auto-close ended registrations rather than silently deleting them from `FormsToMonitor` and dropping triggers. Events stay visible and manageable until explicitly retired via `Archive Event`.
+* **Universal Event Monitoring:** `generateRegistrationSystem` automatically registers every newly generated event in `FormsToMonitor`, regardless of whether date or capacity limits were specified.
+
 ---
 
 ## Verification & Testing Procedures

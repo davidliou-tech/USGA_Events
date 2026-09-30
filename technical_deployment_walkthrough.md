@@ -31,19 +31,19 @@ The `generateForm` function takes the payload and programmatically creates a Goo
 * **Safe Trigger Binding:** Programmatically creates the `masterRespondToRegistration` trigger for the child response sheet without blindly deleting existing active event triggers.
 
 ### 4. Active Event Management & Live Sync (`ManageEventsSidebar.html`)
-Active forms register their lifecycle metadata (`start`, `end`, `max`, `contactEmail`) into script properties under `FormsToMonitor`:
-* **Live Status & Capacity Tracking [V2.9]:** The sidebar displays real-time status banners (🟢 **OPEN**, 🟡 **SCHEDULED**, 🔴 **CLOSED**) and live participant counts with remaining capacity (`42 / 50 Attendees`).
+Active forms register their lifecycle metadata (`title`, `start`, `end`, `max`, `contactEmail`, `publishedUrl`, `sheetUrl`) into script properties under `FormsToMonitor`:
+* **High-Speed Asynchronous Loading (<0.5s):** The sidebar dropdown populates instantly using cached metadata. Live status (`🟢 OPEN`, `🟡 SCHEDULED`, `🔴 CLOSED`) and participant metrics (`42 / 50 Attendees`) are fetched on demand via `getEventDetails(formId)` when an event is selected, avoiding sequential network bottlenecks.
+* **System Log Discovery & Sync (`syncActiveEventsFromSystemLog`):** Scans the Master Sheet's `System Log` audit records and automatically resolves and registers any missing historical or open-date events into `FormsToMonitor`. Accessible via the **`🔄 Sync Events`** sidebar button and the **USGA Events > Advanced Maintenance > Sync Active Events from System Log** menu item.
 * **Direct Navigation Links [V2.9]:** Direct buttons open the **Live Form**, **Edit Form**, and **Responses Spreadsheet** in new tabs.
 * **Manual Open/Close Controls [V2.9]:** Coordinators can force-open or force-close a form immediately via `toggleEventAcceptingResponses`.
 * **Safe Event Archiving [V2.9]:** The **Archive Event** button (`archiveMonitoredEvent`) closes the form, unregisters it from `FormsToMonitor`, and cleanly releases its spreadsheet submit trigger—reclaiming Apps Script trigger quota without deleting any forms, spreadsheets, or attendee rows.
 
 ### 5. Automated Archiving Cron (`masterFormLifecycleCron`)
 * An hourly time-driven cron evaluates monitored events against their scheduled start and end timestamps.
-* **Automated Archival [V2.9]:** When an event concludes and passes the 3-day post-event threshold (`now > config.end + 3 days`), the cron automatically:
-  1. Closes the form (`form.setAcceptingResponses(false)`).
-  2. Retrieves the destination spreadsheet ID (`form.getDestinationId()`).
-  3. Finds and deletes only the `masterRespondToRegistration` trigger tied to that specific spreadsheet.
-  4. Removes the event from `FormsToMonitor` in script properties.
+* **Automated Closing [V2.9]:** When an event concludes and passes the post-event threshold (`now > config.end + 3 days`), the cron automatically:
+  1. Ensures the form is closed (`form.setAcceptingResponses(false)`).
+  2. Sets `config.isAutoClosed = true`.
+  3. Retains the event in `FormsToMonitor` (preserving submit triggers and management links) until the coordinator explicitly decides to click **Archive Event**.
 
 ### 6. Automated Logistics & Response Processing (`masterRespondToRegistration`)
 When an attendee submits or edits a response:
@@ -111,19 +111,23 @@ To ensure maximum security under the principle of least privilege, event coordin
 ### 8.3 Advanced Maintenance Submenu
 Located under **USGA Events > Advanced Maintenance**:
 
-1. **Upgrade Existing Sheet (Full Sync):**
+1. **Sync Active Events from System Log:**
+   * **Backend Function:** `syncActiveEventsFromSystemLogMenu()` / `syncActiveEventsFromSystemLog()`
+   * **Purpose:** Synchronizes all historical and active events logged in the Master Google Sheet's `System Log` audit tab into the active management monitoring watchlist.
+   * **Behavior:** Resolves Form IDs via linked response spreadsheets or folders, caches event titles and URLs, and restores active event management dropdown entries for all existing events.
+2. **Upgrade Existing Sheet (Full Sync):**
    * **Backend Function:** `upgradeExistingSheet()`
    * **Purpose:** Upgrades legacy event spreadsheets (created under V1 or early V2) to the latest V2.9 standard.
    * **Behavior:** Safely renames existing sheets with an `_Old` suffix (preserving all historical data) and reconstructs the `Summary Dashboard`, `Logistics`, `Pickup`, `Drop-Off`, and `Airport Summary` sheets using current formulas, bilingual parsing, and auto-sorting logic.
-2. **Clean Up Dead Triggers:**
+3. **Clean Up Dead Triggers:**
    * **Backend Function:** `cleanupDeadTriggers()`
    * **Purpose:** Prevents orphaned trigger accumulation when response sheets are moved to Google Drive Trash or deleted.
    * **Behavior:** Scans all installable project triggers. If a trigger's bound spreadsheet throws an exception or cannot be opened, the script unbinds and deletes the dead trigger.
-3. **Delete ALL Triggers (Emergency Reset):**
+4. **Delete ALL Triggers (Emergency Reset):**
    * **Backend Function:** `deleteAllTriggers()`
    * **Purpose:** Emergency quota reset and troubleshooting utility.
    * **Behavior:** Deletes every installable trigger across the entire Apps Script project and clears all monitored active events from `FormsToMonitor` in `ScriptProperties`. Resets project trigger count to 0.
-4. **Configure Delegated Web App URL:**
+5. **Configure Delegated Web App URL:**
    * **Backend Function:** `configureDelegatedWebApp()`
    * **Purpose:** Opens a prompt allowing the administrator to store or update the internal Web App URL in `ScriptProperties` under `DELEGATED_WEB_APP_URL`.
 
