@@ -18,6 +18,7 @@ function onOpen() {
           .addItem('Run Historical Forms Description Audit', 'runAudit'))
       .addSeparator()
       .addSubMenu(ui.createMenu('Advanced Maintenance')
+          .addItem('Sync Active Events from System Log', 'syncActiveEventsFromSystemLogMenu')
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
           .addItem('Clean Up Dead Triggers', 'cleanupDeadTriggers')
           .addItem('Delete ALL Triggers (Reset)', 'deleteAllTriggers')
@@ -48,71 +49,280 @@ function showManageEventsSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
-function getMonitoredEvents() {
+function syncActiveEventsFromSystemLog() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const logSheet = ss.getSheetByName("System Log");
+  if (!logSheet) {
+    return { synced: 0, total: 0, message: "No 'System Log' sheet found in active spreadsheet." };
+  }
+  
+  const data = logSheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    return { synced: 0, total: 0, message: "No event records found in System Log." };
+  }
+  
+  const headers = data[0];
+  const titleIdx = headers.indexOf("Event Title");
+  const templateIdx = headers.indexOf("Template Name");
+  const formUrlIdx = headers.indexOf("Form URL");
+  const respSsUrlIdx = headers.indexOf("Response Sheet URL");
+  const folderUrlIdx = headers.indexOf("Drive Folder URL");
+  const sendAsIdx = headers.indexOf("Send-As Mailbox");
+  
   const props = PropertiesService.getScriptProperties();
   const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
   
+  let syncedCount = 0;
+  
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const eventTitle = (titleIdx !== -1 && row[titleIdx]) ? String(row[titleIdx]).trim() : ((templateIdx !== -1 && row[templateIdx]) ? String(row[templateIdx]).trim() : "Event " + i);
+    const formUrl = formUrlIdx !== -1 ? String(row[formUrlIdx]).trim() : "";
+    const respSsUrl = respSsUrlIdx !== -1 ? String(row[respSsUrlIdx]).trim() : "";
+    const folderUrl = folderUrlIdx !== -1 ? String(row[folderUrlIdx]).trim() : "";
+    const sendAs = sendAsIdx !== -1 ? String(row[sendAsIdx]).trim() : "us.events@tjc.org";
+    
+    // Check if any existing monitored form already matches this event by title, sheetUrl, or formUrl
+    let formId = null;
+    for (const id in formsToMonitor) {
+      const cfg = formsToMonitor[id];
+      if ((cfg.sheetUrl && respSsUrl && cfg.sheetUrl === respSsUrl) ||
+          (cfg.title && eventTitle && cfg.title.toLowerCase() === eventTitle.toLowerCase()) ||
+          (cfg.publishedUrl && formUrl && cfg.publishedUrl === formUrl)) {
+        formId = id;
+        break;
+      }
+    }
+    
+    // If not found in existing formsToMonitor, resolve formId:
+    if (!formId) {
+      // 1. Check if Form URL is a direct form ID (not /d/e/)
+      if (formUrl) {
+        const directMatch = formUrl.match(/\/forms\/d\/([a-zA-Z0-9_-]+)/);
+        if (directMatch && directMatch[1] !== 'e') {
+          formId = directMatch[1];
+        }
+      }
+      
+      // 2. Resolve via Response Spreadsheet URL (Spreadsheet.getFormUrl() returns the direct form edit URL)
+      if (!formId && respSsUrl) {
+        const ssMatch = respSsUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+        if (ssMatch) {
+          try {
+            const respSs = SpreadsheetApp.openById(ssMatch[1]);
+            const editFormUrl = respSs.getFormUrl();
+            if (editFormUrl) {
+              const editMatch = editFormUrl.match(/\/forms\/d\/([a-zA-Z0-9_-]+)/);
+              if (editMatch) formId = editMatch[1];
+            }
+          } catch (e) {
+            Logger.log(`Could not open response spreadsheet ${respSsUrl}: ${e.message}`);
+          }
+        }
+      }
+      
+      // 3. Fallback: Search Drive Folder for Google Forms file
+      if (!formId && folderUrl) {
+        const folderMatch = folderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+        if (folderMatch) {
+          try {
+            const folder = DriveApp.getFolderById(folderMatch[1]);
+            const files = folder.getFilesByType(MimeType.GOOGLE_FORMS);
+            if (files.hasNext()) {
+              formId = files.next().getId();
+            }
+          } catch (e) {
+            Logger.log(`Could not search drive folder ${folderUrl}: ${e.message}`);
+          }
+        }
+      }
+    }
+    
+    if (formId) {
+      if (!formsToMonitor[formId]) {
+        formsToMonitor[formId] = {
+          title: eventTitle,
+          start: null,
+          end: null,
+          isExactEnd: false,
+          max: null,
+          contactEmail: sendAs || "us.events@tjc.org",
+          timeZone: Session.getScriptTimeZone(),
+          isZh: false,
+          publishedUrl: formUrl,
+          sheetUrl: respSsUrl
+        };
+        syncedCount++;
+      } else {
+        // Update cached title and URLs if missing or placeholder
+        if (!formsToMonitor[formId].title || formsToMonitor[formId].title.startsWith("Unknown Event") || formsToMonitor[formId].title.startsWith("Event (ID:")) {
+          formsToMonitor[formId].title = eventTitle;
+        }
+        if (!formsToMonitor[formId].sheetUrl && respSsUrl) {
+          formsToMonitor[formId].sheetUrl = respSsUrl;
+        }
+        if (!formsToMonitor[formId].publishedUrl && formUrl) {
+          formsToMonitor[formId].publishedUrl = formUrl;
+        }
+      }
+    }
+  }
+  
+  props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
+  
+  // Ensure cron trigger exists
+  const triggers = ScriptApp.getProjectTriggers();
+  let hasCron = false;
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'masterFormLifecycleCron') {
+      hasCron = true;
+      break;
+    }
+  }
+  if (!hasCron) {
+    ScriptApp.newTrigger('masterFormLifecycleCron').timeBased().everyHours(1).create();
+  }
+  
+  return {
+    synced: syncedCount,
+    total: Object.keys(formsToMonitor).length,
+    message: `Successfully synced ${syncedCount} new event(s) from System Log. Total active monitored events: ${Object.keys(formsToMonitor).length}.`
+  };
+}
+
+function syncActiveEventsFromSystemLogMenu() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = syncActiveEventsFromSystemLog();
+    ui.alert("Sync Active Events", res.message, ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert("Sync Error", "Failed to sync events: " + e.message, ui.ButtonSet.OK);
+  }
+}
+
+function getMonitoredEvents() {
+  const props = PropertiesService.getScriptProperties();
+  let formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  
+  // Auto-sync from System Log if formsToMonitor has fewer events than rows in System Log
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const logSheet = ss.getSheetByName("System Log");
+    if (logSheet && logSheet.getLastRow() > 1) {
+      const logRows = logSheet.getLastRow() - 1;
+      if (Object.keys(formsToMonitor).length < logRows) {
+        syncActiveEventsFromSystemLog();
+        formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+      }
+    }
+  } catch (e) {
+    Logger.log("Auto-sync from System Log error: " + e.message);
+  }
+
   const results = [];
   
   for (const formId in formsToMonitor) {
     const config = formsToMonitor[formId];
-    let title = "";
-    let publishedUrl = "";
-    let editUrl = "";
-    let sheetUrl = "";
-    let isOpen = false;
-    let registrantCount = 0;
+    let title = config.title || "";
+    let publishedUrl = config.publishedUrl || "";
+    let editUrl = config.editUrl || "";
+    let sheetUrl = config.sheetUrl || "";
     
-    try {
-      const form = FormApp.openById(formId);
-      title = String(form.getTitle() || "");
-      if (!title || title.trim() === "") {
-        // Fallback to the file name in Google Drive
-        title = String(DriveApp.getFileById(formId).getName() || "");
+    // Quick fallback to get title if not cached
+    if (!title || title.startsWith("Unknown Event") || title.startsWith("Event (ID:")) {
+      try {
+        const form = FormApp.openById(formId);
+        title = String(form.getTitle() || "");
+        if (!title) title = String(DriveApp.getFileById(formId).getName() || "");
+        publishedUrl = form.getPublishedUrl() || publishedUrl;
+        editUrl = form.getEditUrl() || editUrl;
+        config.title = title;
+        config.publishedUrl = publishedUrl;
+        config.editUrl = editUrl;
+        formsToMonitor[formId] = config;
+        props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
+      } catch(e) {
+        title = title || "Event (ID: " + formId.substring(0, 8) + "...)";
       }
-      publishedUrl = form.getPublishedUrl() || "";
-      editUrl = form.getEditUrl() || "";
-      isOpen = form.isAcceptingResponses();
-
-      const destId = form.getDestinationId();
-      if (destId) {
-        try {
-          const respSs = SpreadsheetApp.openById(destId);
-          sheetUrl = respSs.getUrl();
-          const respSheet = respSs.getSheetByName("Form Responses 1") || respSs.getSheets()[0];
-          if (respSheet && respSheet.getLastRow() > 1) {
-            registrantCount = respSheet.getLastRow() - 1;
-          }
-        } catch (ssErr) {
-          Logger.log("Could not open destination spreadsheet for " + formId + ": " + ssErr.message);
-        }
-      }
-      if (!registrantCount) {
-        try {
-          registrantCount = form.getResponses().length;
-        } catch (rErr) {}
-      }
-    } catch(e) {
-      title = "Deleted/Inaccessible Form";
-    }
-    
-    if (!title || title.trim() === "") {
-      title = "Unknown Event (ID: " + formId.substring(0,8) + "...)";
     }
     
     results.push({
       formId: formId,
-      title: title,
+      title: title || ("Event (ID: " + formId.substring(0, 8) + "...)"),
       config: config,
       publishedUrl: publishedUrl,
       editUrl: editUrl,
-      sheetUrl: sheetUrl,
-      isOpen: isOpen,
-      registrantCount: registrantCount
+      sheetUrl: sheetUrl
     });
   }
   
   return results;
+}
+
+function getEventDetails(formId) {
+  const props = PropertiesService.getScriptProperties();
+  const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const config = formsToMonitor[formId] || {};
+  
+  let title = config.title || "";
+  let publishedUrl = config.publishedUrl || "";
+  let editUrl = config.editUrl || "";
+  let sheetUrl = config.sheetUrl || "";
+  let isOpen = false;
+  let registrantCount = 0;
+  
+  try {
+    const form = FormApp.openById(formId);
+    title = form.getTitle() || title;
+    publishedUrl = form.getPublishedUrl() || publishedUrl;
+    editUrl = form.getEditUrl() || editUrl;
+    isOpen = form.isAcceptingResponses();
+    
+    let destId = form.getDestinationId();
+    if (!destId && sheetUrl) {
+      const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+      if (match) destId = match[1];
+    }
+    
+    if (destId) {
+      try {
+        const respSs = SpreadsheetApp.openById(destId);
+        sheetUrl = respSs.getUrl();
+        const respSheet = respSs.getSheetByName("Form Responses 1") || respSs.getSheets()[0];
+        if (respSheet && respSheet.getLastRow() > 1) {
+          registrantCount = respSheet.getLastRow() - 1;
+        }
+      } catch (ssErr) {
+        Logger.log("Could not open destination spreadsheet for " + formId + ": " + ssErr.message);
+      }
+    }
+  } catch (e) {
+    title = title || "Deleted/Inaccessible Form";
+    Logger.log("Error loading form details for " + formId + ": " + e.message);
+  }
+  
+  // Cache updated values into formsToMonitor
+  if (title && title !== "Deleted/Inaccessible Form") {
+    formsToMonitor[formId] = {
+      ...config,
+      title: title,
+      publishedUrl: publishedUrl,
+      editUrl: editUrl,
+      sheetUrl: sheetUrl
+    };
+    props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
+  }
+  
+  return {
+    formId: formId,
+    title: title,
+    config: formsToMonitor[formId] || config,
+    publishedUrl: publishedUrl,
+    editUrl: editUrl,
+    sheetUrl: sheetUrl,
+    isOpen: isOpen,
+    registrantCount: registrantCount
+  };
 }
 
 function updateMonitoredEvent(formId, updatedConfig) {
@@ -122,12 +332,8 @@ function updateMonitoredEvent(formId, updatedConfig) {
     const props = PropertiesService.getScriptProperties();
     const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
     
-    if (!formsToMonitor[formId]) {
-      throw new Error("Form ID is no longer being monitored.");
-    }
-    
     formsToMonitor[formId] = {
-      ...formsToMonitor[formId],
+      ...(formsToMonitor[formId] || {}),
       ...updatedConfig
     };
     
@@ -146,6 +352,19 @@ function updateMonitoredEvent(formId, updatedConfig) {
       }
     } catch (err) {
       Logger.log("Could not update Settings sheet: " + err.message);
+    }
+
+    // Ensure cron trigger exists
+    const triggers = ScriptApp.getProjectTriggers();
+    let hasCron = false;
+    for (let i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'masterFormLifecycleCron') {
+        hasCron = true;
+        break;
+      }
+    }
+    if (!hasCron) {
+      ScriptApp.newTrigger('masterFormLifecycleCron').timeBased().everyHours(1).create();
     }
 
     // Re-run the lifecycle cron immediately to apply any date changes instantly
@@ -1265,20 +1484,23 @@ function generateForm(payload) { try {
           .create();
     }
 
-    // Save Registration Lifecycle config
-    if (payload.eventDetails.regStartDate || payload.eventDetails.regEndDate || payload.eventDetails.maxAttendees) {
-      const props = PropertiesService.getScriptProperties();
-      let monitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
-      monitor[form.getId()] = {
-        start: payload.eventDetails.regStartTimestamp || (payload.eventDetails.regStartDate ? parseLocalDate(payload.eventDetails.regStartDate).getTime() : null),
-        end: payload.eventDetails.regEndTimestamp || (payload.eventDetails.regEndDate ? parseLocalDate(payload.eventDetails.regEndDate).getTime() : null),
-        isExactEnd: payload.eventDetails.regEndDate ? payload.eventDetails.regEndDate.includes('T') : false,
-        max: payload.eventDetails.maxAttendees ? parseInt(payload.eventDetails.maxAttendees, 10) : null,
-        contactEmail: payload.eventDetails.contactEmail || "us.events@tjc.org",
-        timeZone: payload.eventDetails.userTimeZone || Session.getScriptTimeZone(),
-        isZh: isZh
-      };
-      props.setProperty('FormsToMonitor', JSON.stringify(monitor));
+    // Save Registration Lifecycle config (always register event in FormsToMonitor)
+    const props = PropertiesService.getScriptProperties();
+    let monitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+    monitor[form.getId()] = {
+      title: eventTitle,
+      start: payload.eventDetails.regStartTimestamp || (payload.eventDetails.regStartDate ? parseLocalDate(payload.eventDetails.regStartDate).getTime() : null),
+      end: payload.eventDetails.regEndTimestamp || (payload.eventDetails.regEndDate ? parseLocalDate(payload.eventDetails.regEndDate).getTime() : null),
+      isExactEnd: payload.eventDetails.regEndDate ? payload.eventDetails.regEndDate.includes('T') : false,
+      max: payload.eventDetails.maxAttendees ? parseInt(payload.eventDetails.maxAttendees, 10) : null,
+      contactEmail: payload.eventDetails.contactEmail || "us.events@tjc.org",
+      timeZone: payload.eventDetails.userTimeZone || Session.getScriptTimeZone(),
+      isZh: isZh,
+      publishedUrl: form.getPublishedUrl(),
+      editUrl: form.getEditUrl(),
+      sheetUrl: responseSs.getUrl()
+    };
+    props.setProperty('FormsToMonitor', JSON.stringify(monitor));
       
       // Ensure cron trigger exists
       let hasCron = false;
@@ -1315,7 +1537,6 @@ function generateForm(payload) { try {
           Logger.log("Could not set custom closed message: " + e.message);
         }
       }
-    }
   } finally {
     genLock.releaseLock();
   }
@@ -3265,32 +3486,16 @@ function masterFormLifecycleCron() {
       try {
         const form = FormApp.openById(formId);
         
-        // Automated Archiving Check: 3 days after event concludes (config.end + 3*24*60*60*1000)
+        // Automated Closing Check: If registration end date has passed, ensure form is closed but keep in monitoring
         const archiveThreshold = config.end ? (config.end + 3 * 24 * 60 * 60 * 1000) : null;
         if (archiveThreshold && now > archiveThreshold) {
-          Logger.log(`Auto-archiving completed event (Form ID: ${formId})`);
-          try {
-            form.setAcceptingResponses(false);
-          } catch(e) {}
-
-          try {
-            const destId = form.getDestinationId();
-            if (destId) {
-              for (let i = 0; i < allTriggers.length; i++) {
-                const trig = allTriggers[i];
-                if (trig.getHandlerFunction() === 'masterRespondToRegistration' && trig.getTriggerSourceId() === destId) {
-                  ScriptApp.deleteTrigger(trig);
-                  Logger.log(`Auto-archiver: safely deleted submit trigger for spreadsheet ${destId}`);
-                }
-              }
-            }
-          } catch (trigErr) {
-            Logger.log(`Could not clean triggers for form ${formId}: ${trigErr.message}`);
+          if (form.isAcceptingResponses()) {
+            Logger.log(`Auto-closing ended registration (Form ID: ${formId})`);
+            try {
+              form.setAcceptingResponses(false);
+            } catch(e) {}
           }
-
-          delete formsToMonitor[formId];
-          changed = true;
-          continue;
+          config.isAutoClosed = true;
         }
 
         const isAccepting = form.isAcceptingResponses();

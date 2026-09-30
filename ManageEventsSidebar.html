@@ -96,7 +96,12 @@
     </div>
 
     <div class="form-group" id="eventSelectContainer" style="display: none;">
-      <label for="eventSelect">Select an Event</label>
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+        <label for="eventSelect" style="margin-bottom: 0;">Select an Event</label>
+        <a href="#" id="syncBtn" onclick="syncFromSystemLog()" style="font-size: 11px; color: #1a73e8; text-decoration: none; font-weight: bold; cursor: pointer;">
+          🔄 Sync Events
+        </a>
+      </div>
       <select id="eventSelect" onchange="onEventSelect()">
         <option value="">-- Choose Event --</option>
       </select>
@@ -244,13 +249,50 @@
         const ev = monitoredEvents.find(e => e.formId === formId);
         if (!ev) return;
 
-        // Populate fields
-        document.getElementById('startDate').value = formatTimestampToLocal(ev.config.start);
-        document.getElementById('endDate').value = formatTimestampToLocal(ev.config.end);
-        document.getElementById('maxAttendees').value = ev.config.max || '';
-        document.getElementById('contactEmail').value = ev.config.contactEmail || '';
+        detailsDiv.style.display = 'block';
 
-        // Configure Action Links
+        // Pre-populate fields immediately if config exists
+        if (ev.config) {
+          document.getElementById('startDate').value = formatTimestampToLocal(ev.config.start);
+          document.getElementById('endDate').value = formatTimestampToLocal(ev.config.end);
+          document.getElementById('maxAttendees').value = ev.config.max || '';
+          document.getElementById('contactEmail').value = ev.config.contactEmail || '';
+        }
+
+        // Configure Action Links if cached
+        updateActionLinks(ev);
+
+        // Set banner to loading state while fetching live form status & responses
+        const banner = document.getElementById('statusBanner');
+        banner.style.backgroundColor = '#fff3cd';
+        banner.style.color = '#856404';
+        banner.style.border = '1px solid #ffeeba';
+        document.getElementById('statusBadgeText').innerHTML = '<span class="spinner"></span> Checking live status...';
+        document.getElementById('capacityBadgeText').innerText = 'Loading counts...';
+
+        // Fetch live status & attendee counts on-demand for this specific event
+        google.script.run
+          .withSuccessHandler(function(details) {
+            Object.assign(ev, details);
+            if (details.config) ev.config = details.config;
+
+            document.getElementById('startDate').value = formatTimestampToLocal(ev.config.start);
+            document.getElementById('endDate').value = formatTimestampToLocal(ev.config.end);
+            document.getElementById('maxAttendees').value = ev.config.max || '';
+            document.getElementById('contactEmail').value = ev.config.contactEmail || '';
+
+            updateActionLinks(ev);
+            updateStatusBanner(ev);
+          })
+          .withFailureHandler(function(err) {
+            banner.style.backgroundColor = '#f8d7da';
+            banner.style.color = '#721c24';
+            document.getElementById('statusBadgeText').innerText = 'Status check failed: ' + err.message;
+          })
+          .getEventDetails(formId);
+      }
+
+      function updateActionLinks(ev) {
         const linkLive = document.getElementById('linkLiveForm');
         const linkEdit = document.getElementById('linkEditForm');
         const linkSheet = document.getElementById('linkSheet');
@@ -275,11 +317,30 @@
         } else {
           linkSheet.style.display = 'none';
         }
+      }
 
-        // Configure Status Banner & Toggle Button
-        updateStatusBanner(ev);
+      function syncFromSystemLog() {
+        const syncBtn = document.getElementById('syncBtn');
+        const originalText = syncBtn.innerHTML;
+        syncBtn.innerHTML = '<span class="spinner"></span> Syncing...';
+        const status = document.getElementById('status');
+        status.className = 'loading';
+        status.innerHTML = '<span class="spinner"></span> Scanning System Log for created events...';
+        status.style.display = 'block';
 
-        detailsDiv.style.display = 'block';
+        google.script.run
+          .withSuccessHandler(function(res) {
+            syncBtn.innerHTML = originalText;
+            status.className = 'success';
+            status.innerHTML = `<strong>Synced:</strong> ${res.message}`;
+            loadEvents();
+          })
+          .withFailureHandler(function(err) {
+            syncBtn.innerHTML = originalText;
+            status.className = 'error';
+            status.innerHTML = '<strong>Sync failed:</strong> ' + err.message;
+          })
+          .syncActiveEventsFromSystemLog();
       }
 
       function updateStatusBanner(ev) {
