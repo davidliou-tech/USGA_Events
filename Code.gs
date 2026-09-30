@@ -20,7 +20,9 @@ function onOpen() {
       .addSubMenu(ui.createMenu('Advanced Maintenance')
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
           .addItem('Clean Up Dead Triggers', 'cleanupDeadTriggers')
-          .addItem('Delete ALL Triggers (Reset)', 'deleteAllTriggers'))
+          .addItem('Delete ALL Triggers (Reset)', 'deleteAllTriggers')
+          .addSeparator()
+          .addItem('Configure Delegated Web App URL', 'configureDelegatedWebApp'))
       .addToUi();
 }
 
@@ -548,14 +550,55 @@ function setupAirportSummarySheet(ss, hasAirportFields) {
 }
 
 function generateForm(payload) { try {
-  // 0. Verify Email Authorization
-  const requiredEmail = (payload.eventDetails.contactEmail || "us.events@tjc.org").toLowerCase();
-  const activeEmail = Session.getActiveUser().getEmail().toLowerCase();
-  
-  const aliases = GmailApp.getAliases().map(alias => alias.toLowerCase());
-  
-  if (activeEmail !== requiredEmail && !aliases.includes(requiredEmail)) {
-    throw new Error(`Authentication Error: You are logged in as ${activeEmail || "a different account"}. You must log into the ${requiredEmail} account (or have it set as an authorized alias) to generate this form, ensuring automated receipts are sent from the correct mailbox.`);
+  // If not already running inside delegated Web App, check if delegation is configured
+  if (!payload.isDelegatedExecution) {
+    // 0. Verify Email Authorization for the coordinator initiating the generation
+    const requiredEmail = (payload.eventDetails.contactEmail || "us.events@tjc.org").toLowerCase();
+    const activeEmail = Session.getActiveUser().getEmail().toLowerCase();
+    
+    const aliases = GmailApp.getAliases().map(alias => alias.toLowerCase());
+    
+    if (activeEmail !== requiredEmail && !aliases.includes(requiredEmail)) {
+      throw new Error(`Authentication Error: You are logged in as ${activeEmail || "a different account"}. You must log into the ${requiredEmail} account (or have it set as an authorized alias) to generate this form, ensuring automated receipts are sent from the correct mailbox.`);
+    }
+
+    const props = PropertiesService.getScriptProperties();
+    const delegatedUrl = props.getProperty('DELEGATED_WEB_APP_URL');
+    if (delegatedUrl) {
+      payload.coordinatorEmail = activeEmail;
+      payload.isDelegatedExecution = true;
+      
+      const token = ScriptApp.getOAuthToken();
+      const options = {
+        method: 'post',
+        contentType: 'application/json',
+        headers: {
+          Authorization: 'Bearer ' + token
+        },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      };
+      
+      const response = UrlFetchApp.fetch(delegatedUrl, options);
+      const code = response.getResponseCode();
+      const text = response.getContentText();
+      
+      if (code >= 200 && code < 300) {
+        let json;
+        try {
+          json = JSON.parse(text);
+        } catch(e) {
+          throw new Error("Invalid response from delegated Web App: " + text.substring(0, 200));
+        }
+        if (json.status === 'success') {
+          return json.result;
+        } else {
+          throw new Error(json.message || "Unknown error from delegated provisioner.");
+        }
+      } else {
+        throw new Error(`Delegated Service Error (HTTP ${code}): ${text.substring(0, 300)}`);
+      }
+    }
   }
 
   // 1. Create the new Form
@@ -1064,9 +1107,29 @@ function generateForm(payload) { try {
   const masterSheetFile = DriveApp.getFileById(ssId);
   const parents = masterSheetFile.getParents();
   
+  let parentFolder = null;
   if (parents.hasNext()) {
-    const parentFolder = parents.next();
-    targetFolder = parentFolder.createFolder(formTitle); 
+    parentFolder = parents.next();
+  } else {
+    // Fallback: If Master Sheet is located at the root of a Shared Drive,
+    // DriveApp cannot resolve parents via getParents(). Use the Shared Drive ID directly.
+    const props = PropertiesService.getScriptProperties();
+    const MASTER_SHARED_DRIVE_ID = props.getProperty('MASTER_DRIVE_FOLDER_ID') || "0AJ4t2YKTRQHWUk9PVA";
+    try {
+      parentFolder = DriveApp.getFolderById(MASTER_SHARED_DRIVE_ID);
+    } catch (e) {
+      Logger.log("Failed to resolve Shared Drive root folder: " + e.message);
+    }
+  }
+
+  if (!parentFolder) {
+    throw new Error("Target Folder Error: Could not locate the Master Shared Drive folder. Please verify access to the USGA Events Registration drive.");
+  }
+
+  try {
+    targetFolder = parentFolder.createFolder(formTitle);
+  } catch (folderErr) {
+    throw new Error(`Permission Error: Could not create the folder "${formTitle}" in the Shared Drive (${folderErr.message}). Please ensure your Google account has at least "Content Manager" access to the USGA Events Registration Shared Drive.`);
   }
   
   const responseSs = SpreadsheetApp.create(formTitle + " Responses");
@@ -1154,8 +1217,34 @@ function generateForm(payload) { try {
   }
   
   if (targetFolder) {
-    DriveApp.getFileById(form.getId()).moveTo(targetFolder);
-    DriveApp.getFileById(responseSs.getId()).moveTo(targetFolder);
+    try {
+      DriveApp.getFileById(form.getId()).moveTo(targetFolder);
+      DriveApp.getFileById(responseSs.getId()).moveTo(targetFolder);
+    } catch (moveErr) {
+      throw new Error(`File Placement Error: Successfully created the Form and Sheet, but could not move them into the "${formTitle}" folder in the Shared Drive (${moveErr.message}). Please ensure your account has at least "Content Manager" access to the USGA Events Registration Shared Drive.`);
+    }
+
+    // Automatically grant Editor access to the coordinator and contactEmail on the new event folder
+    const coordinatorEmail = payload.coordinatorEmail || Session.getActiveUser().getEmail();
+    if (coordinatorEmail) {
+      try {
+        targetFolder.addEditor(coordinatorEmail);
+        DriveApp.getFileById(form.getId()).addEditor(coordinatorEmail);
+        DriveApp.getFileById(responseSs.getId()).addEditor(coordinatorEmail);
+      } catch (shareErr) {
+        Logger.log("Notice: Could not auto-grant editor permission to coordinator: " + shareErr.message);
+      }
+    }
+    const contactEmail = payload.eventDetails && payload.eventDetails.contactEmail;
+    if (contactEmail && contactEmail.toLowerCase() !== (coordinatorEmail || '').toLowerCase()) {
+      try {
+        targetFolder.addEditor(contactEmail);
+        DriveApp.getFileById(form.getId()).addEditor(contactEmail);
+        DriveApp.getFileById(responseSs.getId()).addEditor(contactEmail);
+      } catch (shareErr) {
+        Logger.log("Notice: Could not auto-grant editor permission to contactEmail: " + shareErr.message);
+      }
+    }
   }
   
   const genLock = LockService.getScriptLock();
@@ -1231,15 +1320,23 @@ function generateForm(payload) { try {
     genLock.releaseLock();
   }
 
-  const masterSs = SpreadsheetApp.getActiveSpreadsheet();
-  appendAuditLog(masterSs, payload, form, responseSs);
-
-
+  let masterSs = SpreadsheetApp.getActiveSpreadsheet();
+  if (!masterSs) {
+    try {
+      masterSs = SpreadsheetApp.openById("1ZfdmYXN82Mtj3fginstI8altvvBQNzNcj08s8hCNKF0");
+    } catch(e) {
+      Logger.log("Could not open master spreadsheet by ID: " + e.message);
+    }
+  }
+  if (masterSs) {
+    appendAuditLog(masterSs, payload, form, responseSs, targetFolder);
+  }
 
   return {
     editUrl: form.getEditUrl(),
     sheetUrl: responseSs.getUrl(),
-    publishedUrl: form.getPublishedUrl()
+    publishedUrl: form.getPublishedUrl(),
+    folderUrl: targetFolder ? targetFolder.getUrl() : ""
   };
   } catch (err) {
     throw new Error(err.message + "\nStack: " + err.stack);
@@ -1306,7 +1403,7 @@ function addFieldToForm(form, field, payload) {
 
   if (field.name.includes('Parent/Guardian') && !field.name.includes('Signature')) {
     item = form.addTextItem().setTitle(t(field.name));
-    item.setHelpText(t("If participant is over 18, enter 'N/A'."));
+    item.setHelpText(t("If participant is 18 or over, enter 'N/A'."));
     item.setRequired(true);
     return item;
   }
@@ -2473,15 +2570,15 @@ function testEmailVersions() {
   Logger.log("Test emails sent to " + testEmail);
 }
 
-function appendAuditLog(ss, payload, form, responseSs) {
+function appendAuditLog(ss, payload, form, responseSs, targetFolder) {
   try {
     let logSheet = ss.getSheetByName("System Log");
     let headers = [];
     if (!logSheet) {
       logSheet = ss.insertSheet("System Log");
-      headers = ["Timestamp", "Template Name", "Event Year", "Coordinator", "Event Title", "Send-As Mailbox", "Form URL", "Response Sheet URL", "Fields Included"];
+      headers = ["Timestamp", "Template Name", "Event Year", "Coordinator", "Event Title", "Send-As Mailbox", "Form URL", "Response Sheet URL", "Drive Folder URL", "Fields Included"];
       logSheet.appendRow(headers);
-      logSheet.getRange("A1:I1").setFontWeight("bold").setBackground("#f3f3f3");
+      logSheet.getRange("A1:J1").setFontWeight("bold").setBackground("#f3f3f3");
       logSheet.setFrozenRows(1);
     } else {
       headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
@@ -2495,10 +2592,21 @@ function appendAuditLog(ss, payload, form, responseSs) {
         logSheet.getRange("C1").setValue("Event Year");
         headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
       }
+      if (headers.indexOf("Drive Folder URL") === -1) {
+        const respIdx = headers.indexOf("Response Sheet URL");
+        if (respIdx !== -1) {
+          logSheet.insertColumnAfter(respIdx + 1);
+          logSheet.getRange(1, respIdx + 2).setValue("Drive Folder URL");
+        } else {
+          logSheet.insertColumnAfter(headers.length);
+          logSheet.getRange(1, headers.length + 1).setValue("Drive Folder URL");
+        }
+        headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+      }
     }
 
     const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm:ss");
-    const coordinator = Session.getActiveUser().getEmail();
+    const coordinator = payload.coordinatorEmail || Session.getActiveUser().getEmail();
     const templateName = payload.eventDetails.templateName || "Unknown Template";
     const eventYear = payload.eventDetails.year || "";
     const eventTitle = payload.eventDetails.title;
@@ -2514,6 +2622,9 @@ function appendAuditLog(ss, payload, form, responseSs) {
     rowData[headers.indexOf("Send-As Mailbox")] = sendAs;
     rowData[headers.indexOf("Form URL")] = form.getPublishedUrl();
     rowData[headers.indexOf("Response Sheet URL")] = responseSs.getUrl();
+    if (headers.indexOf("Drive Folder URL") !== -1) {
+      rowData[headers.indexOf("Drive Folder URL")] = targetFolder ? targetFolder.getUrl() : "";
+    }
     rowData[headers.indexOf("Fields Included")] = fieldNames;
 
     logSheet.appendRow(rowData);
@@ -2877,6 +2988,7 @@ function translateText(text, targetLanguages) {
       'Other Special Needs/Accommodations (e.g., mobility assistance)': '其他活動期間之特殊需求或協助事項 (例如：行動輔助)',
       'Age': '年齡',
       'Name of Parent/Guardian (if Participant is under 18)': '家長/監護人姓名（若參加者未滿18歲）',
+      "If participant is 18 or over, enter 'N/A'.": '若參加者年滿 18 歲以上，請填寫「N/A」。',
       "If participant is over 18, enter 'N/A'.": '若參加者年滿 18 歲以上，請填寫「N/A」。',
       'If participant is over 18, submit N/A.': '若參加者年滿 18 歲以上，請填寫「N/A」。',
       'Please enter a whole number between 1 and 99.': '請輸入 1 到 99 之間的整數。',
@@ -3552,3 +3664,62 @@ function upgradeExistingSheet() {
 
   ui.alert('Success', 'Spreadsheet successfully upgraded to the new V2 format!', ui.ButtonSet.OK);
 }
+
+// =======================================================================
+// DELEGATED WEB APP PROVISIONER (OPTION A)
+// =======================================================================
+
+/**
+ * Web App HTTP POST endpoint.
+ * When deployed as "Execute as: Me", this runs under the Master Admin identity,
+ * allowing subfolder creation in the Shared Drive root and automatic permission
+ * delegation to event coordinators without granting them Content Manager rights
+ * over the entire Shared Drive.
+ */
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      throw new Error("Invalid request: No payload received.");
+    }
+    const payload = JSON.parse(e.postData.contents);
+    payload.isDelegatedExecution = true;
+    const result = generateForm(payload);
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'success',
+      result: result
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: 'error',
+      message: err.message,
+      stack: err.stack
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Configuration dialog to store or clear the Delegated Web App URL.
+ */
+function configureDelegatedWebApp() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+  const currentUrl = props.getProperty('DELEGATED_WEB_APP_URL') || '';
+  
+  const prompt = ui.prompt(
+    'Configure Delegated Web App URL',
+    `Enter the Web App deployment URL (Execute as: Me) to enable delegated execution without requiring coordinators to have Shared Drive Content Manager permissions.\n\nCurrent URL: ${currentUrl || '(Not configured)'}\n\nPaste new URL (or leave blank to clear):`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (prompt.getSelectedButton() === ui.Button.OK) {
+    const val = prompt.getResponseText().trim();
+    if (val) {
+      props.setProperty('DELEGATED_WEB_APP_URL', val);
+      ui.alert('Success', 'Delegated Web App URL configured successfully! Event generations will now run with delegated admin permissions and automatically grant folder-level Editor access to coordinators.', ui.ButtonSet.OK);
+    } else {
+      props.deleteProperty('DELEGATED_WEB_APP_URL');
+      ui.alert('Updated', 'Delegated Web App URL cleared. System reverted to standard direct execution.', ui.ButtonSet.OK);
+    }
+  }
+}
+

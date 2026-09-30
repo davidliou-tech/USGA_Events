@@ -1,54 +1,112 @@
 # USGA Event Registration System: Overview & User Guide
 
-This document serves as both an overview and a practical manual for event coordinators using the new USGA Event Registration Form Generator.
+This guide provides event coordinators with an overview and practical instructions for creating, launching, and managing event registration forms using the USGA Event Registration System.
 
-## Key Features
-* **Dynamic Form Generation (Sidebar or Wide Window) [NEW in V2.8]:** Choose between an expanded sidebar UI (350px) or a wide modeless dialog window (500x750px) to select templates, configure details, and generate forms.
-* **Smart Regional Logic & Titles:** The sidebar includes smart dropdowns for Region (East, West, etc.) and Season (Winter, Summer, etc.). These dynamically generate the Form's title (e.g., East Region Summer 2026 Student Spiritual Convocation) in real-time.
-* **Automated Minors Registration Logic & Safeguards [UPDATED in V2.8]:** The system includes a toggle to designate if an event includes participants under 18. For minor-inclusive events, it automatically injects a minor disclaimer into the form description, mandates `Age` with 1-99 whole number validation, positions `Parent/Guardian` directly beneath Age with N/A guidance, and includes `Minor's Email (at least 13 years of age)`. Receipts are safeguarded to route only to parents/guardians.
-* **Dynamic Class Filtering:** For Student Spiritual Convocations (SSC), event coordinators can select the specific classes they are hosting (e.g., J1, J2) in the sidebar. The backend automatically strips out unselected classes from the Google Form's multiple-choice options to prevent incorrect registrations.
-* **Active Event Management:** Event registration windows (open and close dates), maximum attendee limits (waitlisting), and contact emails can be edited natively via the "Manage Active Events" sidebar at any time, with live synchronization to the response spreadsheet Settings tab [V2.8].
-* **Automated Logistics Sync (Flight & Train/Bus) [UPDATED in V2.8]:** The system automatically creates Pickup, Drop-Off, and Logistics tabs. As participants register, background automation extracts both flight and train/bus details (stations, carriers, train numbers), safely appends them, auto-sorts them chronologically, and highlights live updates.
-* **Custom Email Auto-Responder with Alias Security:** Every registration automatically triggers a highly polished, branded confirmation email sent from your designated mailbox alias (e.g., us.events@tjc.org). The form generation enforces strict authentication, ensuring the logged-in user matches the intended contact email to guarantee automated receipts are sent from the correct mailbox.
-* **Built-In "Edit Registration" Button:** The custom email now automatically hunts down the participant's unique Edit URL and embeds a highly visible "Edit Your Registration" button directly into the HTML confirmation email.
+---
 
-## How to Use It
+## What the System Does
 
-### Generating a New Event
-1. Open the Master USGA Form Generator Google Sheet.
-2. Click the **USGA Events** menu at the top, then choose either **Open Form Generator (Sidebar)** or **Open Form Generator (Wide Window)**.
-3. In the generator interface:
-   * Select your Template (e.g., Young Adult Spiritual Convocation (YASC)).
-   * Toggle your Region and Season to instantly generate the title.
-   * If generating an SSC, select the Classes you are hosting.
-   * Toggle the *Includes Minors* switch appropriately for your event.
-   * Input your standard Event Dates (start and end). *Note: As of V2.7/V2.8, these support clean date inputs with optional time indicators, while Registration Windows enforce 12:01 AM start and 11:59 PM end defaults.*
-   * Review and check/uncheck any specific fields you want included.
-4. Click **Generate Google Form**. *(Note: Make sure you are logged into the correct Google account matching the 'Send-As' email alias!)*
+The USGA Event Registration System automates the setup and logistical tracking for church events (such as Student Spiritual Convocations, National Seminars, and Fellowship Conferences). In just a few clicks, it creates:
 
-### Managing Active Events (Registration Windows & Waitlists)
-1. Click the **USGA Events** menu at the top, then **Manage Active Events**.
-2. Select your event from the dropdown menu.
-3. Update your **Registration Start Date**, **Registration End Date**, **Max Attendees**, or **Contact Email**.
-4. Click **Save Changes**. The backend automatically syncs these settings with the form lifecycle cron trigger.
+1. **A Custom Google Form:** Tailored with your event title, dates, descriptions, and required registration questions (with optional bilingual English/Traditional Chinese translations).
+2. **A Linked Response Spreadsheet:** A pre-configured tracking workbook featuring automated rosters for transportation, lodging, dietary needs, and real-time summary dashboards.
+3. **A Dedicated Google Drive Folder:** Automatically created inside the official USGA Drive root and shared with you as an Editor.
+4. **Automated Confirmation Emails:** Sends branded registration confirmations to attendees upon submission.
 
-### Managing Event Logistics (Transportation, Lodging & Special Arrangements)
-* Open the response spreadsheet that was automatically created for your event.
-* You will see three automated tabs: `Participants`, `Pickup`, and `Drop-Off`.
-* As people register, the Pickup and Drop-Off sheets will automatically populate and sort themselves chronologically by Airport and Time.
-* **Assigning Drivers:** You can safely type the names of volunteer drivers directly into the blank "Driver Full Name" columns. As new registrations flow in and the sheet re-sorts, your driver assignments will seamlessly move alongside the passenger's row!
+---
 
-## Event Coordinator Checklist
-After generating a form, coordinators should review the following critical items:
-* **Mailbox Access:** Ensure you have logged in to and authenticated with the correct group mailbox (or alias) so that automated confirmation emails are sent from the proper "Send-As" address.
-* **Publishing the Participants List:**
-   1. Publish the "Participants" tab in the Google Sheet to the web.
-   2. Link that published URL to the "View Here" text in the form description.
-   *Note: If you do not want to publish the attendee list for privacy reasons, you must manually remove the "Attendees: View Here" text from the form's description.*
-* **Theming:** Manually update the Google Form's banner image and color scheme to match your event's branding.
-* **Translations Check:** If the event requires other translated languages, meticulously proofread all auto-generated translations in the form to ensure accuracy and appropriate context.
-* **Minors Awareness:** When creating the form, be strictly aware of whether participants will include minors, and ensure the "Includes Minors" toggle is set correctly to enforce parental consent and minor email capture. *(Note: As of V2.7, the CYSC template defaults to capturing minors' emails).*
+## Key Features for Event Coordinators
 
-## System Maintenance
-* **Updating Fields:** The entire field dictionary is stored in the `Field Dictionary` tab. You can add new fields, change options (like Interpretation Languages), or adjust "Required" status directly in the sheet.
-* **Run Setup:** If you ever mess up the dictionary or templates, simply click **USGA Events > Setup Initial Configuration (Run Once)** to restore the master defaults!
+* **Dual Interface Modes:** Launch the generator as a side-panel sidebar or as a wide popup window for a spacious view of all questions.
+* **Instant Field Search & Batch Selection:** Quickly find fields using the search bar (e.g., search *"T-shirt"*, *"Airport"*, or *"Lodging"*) and use **Select All** or **Clear** buttons on any category.
+* **Multi-Child / Sibling Support:** Parents can register multiple children using the same contact email address. Each child automatically gets their own dedicated row across the transportation and lodging sheets.
+* **Automated Drive Organization & Access:** The system automatically places your event files into a dedicated event folder within the official USGA Shared Drive and grants you Editor access.
+* **Live Event Monitoring & Capacity Management:** Use the **Manage Active Events** tool to view registration counts, monitor remaining spots, change deadlines, or manually open/close forms.
+* **Volunteer Driver & Rooming Worksheets:** Flight, train, and bus arrivals/departures are automatically grouped chronologically. You can assign volunteer drivers and room numbers directly in the spreadsheet without breaking automated sorting.
+
+---
+
+## How to Use the System
+
+The operational workflow is divided into three key areas: generating a new form, managing an active event, and tracking event logistics.
+
+### 1. Generating an Event Registration Form
+
+Follow these five steps in the Form Generator to create a complete registration form and tracking spreadsheet:
+
+* **Step 1: Open the Form Generator**
+  1. Open the Master USGA Form Generator Google Sheet.
+  2. In the top navigation menu, click **USGA Events > Open Form Generator (Sidebar)** (or **Open Form Generator (Wide Window)**).
+
+* **Step 2: Configure Event Information**
+  * **Event Template:** Select your event type (e.g., *Student Spiritual Convocation (SSC)*, *National Youth Ministry Conference (NYMC)*, or *General Event*).
+  * **Region, Season & Year:** Selecting these will automatically generate the official event title.
+  * **Classes (SSC only):** Check the specific student levels attending (e.g., E2, J1, J2, S1).
+  * **Includes Minors:** Switch this toggle to **ON** if your event includes attendees under 18. This automatically includes youth safeguarding policies, parental consent, and emergency contact fields.
+  * **Contact Email:** Enter your official coordinator email or group alias (e.g., `us.events@tjc.org`).
+
+* **Step 3: Set Dates and Capacity**
+  * **Event Dates:** Enter the official Start and End dates for the event.
+  * **Registration Window:** Set the dates and times when registration should automatically open and close.
+  * **Max Attendees:** Enter the maximum capacity limit for your event.
+
+* **Step 4: Choose Form Questions**
+  * The generator pre-selects recommended fields based on your chosen template.
+  * **Search / Filter:** Type in the **🔍 Filter fields** search box to quickly locate specific fields.
+  * **Customize:** Use category **Select All** or **Clear** links, or check/uncheck individual questions to match your event's exact needs.
+
+* **Step 5: Generate Form & Sheet**
+  1. Click the green **Generate Form & Sheet** button.
+  2. A progress indicator will display while the system creates your files (~10–15 seconds).
+  3. Once complete, a success window provides one-click links to your new assets:
+     * 🌐 **Responder Link (Live Form):** The link you share with participants to register.
+     * ✏️ **Edit Form:** Opens Google Forms to customize the theme color, banner image, or question wording.
+     * 📊 **View Response Sheet:** Opens the response tracking spreadsheet.
+     * 📁 **View Event Drive Folder:** Opens your dedicated event folder in Google Drive where all your event files are stored.
+
+### 2. Managing Active Events
+
+You can manage your event at any time after generation by clicking **USGA Events > Manage Active Events** in the top menu.
+
+* **Check Live Status & Capacity:** Select your event from the dropdown to see real-time registration counts, remaining spots, and current status:
+  * 🟢 **OPEN:** Registration is live and accepting submissions.
+  * 🟡 **SCHEDULED:** Registration is configured and will open automatically on your scheduled start date.
+  * 🔴 **CLOSED:** Registration has closed or reached maximum capacity.
+* **Quick Links:** Open the Live Form, Edit Form, or Response Sheet with a single click.
+* **Update Deadlines or Capacity Caps:** Modify the event dates, registration window, or attendee limit, then click **Save Changes**.
+* **Manually Open or Close:** Click **Open Form Now** to open registration early, or **Force Close Form** to stop accepting submissions immediately.
+* **Archive Completed Events:** When an event is finished, click **Archive Event**. This safely closes the form and unregisters it from the live monitoring system while keeping all your forms, spreadsheets, and registration records completely safe.
+
+### 3. Managing Event Logistics (Spreadsheet Overview)
+
+When attendees register, their data automatically populates the specialized tabs in your event response spreadsheet:
+
+* **Pickup & Drop-Off Sheets (Transportation):**
+  * Inbound and outbound travel records are added automatically and sorted chronologically by **Date then Time**.
+  * **Assigning Drivers:** Enter volunteer driver names directly into the *Driver Full Name* and *Driver Phone Number* columns next to the passenger. Your driver assignments will stay securely linked to the passenger even as new attendees register and the list updates.
+
+* **Logistics Sheet (Lodging & Special Needs):**
+  * Lists all participants requiring church lodging, their sleep preferences, and dietary restrictions.
+  * **Assigning Rooms:** Enter room or dorm assignments directly in the *Room Assignment* column.
+
+* **Summary Dashboard & Airport Summary:**
+  * **Summary Dashboard:** Provides at-a-glance charts and counts for gender breakdowns, meals, church lodging requests, and dietary needs.
+  * **Airport Summary:** Summarizes passenger arrival and departure volumes by airport code so you can schedule shuttles efficiently.
+
+---
+
+## Event Coordinator Launch Checklist
+
+Before sharing your registration link with members:
+
+- [ ] **Contact Mailbox:** Confirm you are authorized to send from the Contact Email alias in Gmail so automated confirmation emails send without interruption.
+- [ ] **Registration Dates:** Double-check that registration start and end times accurately match your announcements.
+- [ ] **Includes Minors Setting:** Verify that parental consent and emergency contact questions are included if minors are attending.
+- [ ] **Form Branding & Welcome Text:** Open the **Edit Form** link to adjust the header theme color, add your local church welcome message, or upload a promotional banner image.
+- [ ] **Attendee List Publishing (Optional):** If attendees should be able to see who else is registered:
+  1. Open the response spreadsheet.
+  2. Click **File > Share > Publish to web**.
+  3. Select the `Participants` sheet and click **Publish**.
+  4. Paste the published link into the Google Form description.
+  *(If registration is confidential, leave the link out of the description).*
+- [ ] **Bilingual Forms Proofread:** For events with Traditional Chinese enabled, review the translated questions to ensure local dialect preferences are met.
