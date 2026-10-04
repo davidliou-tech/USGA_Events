@@ -54,7 +54,7 @@ When an attendee submits or edits a response:
 * **Summary Dashboard Formula Accuracy [V2.9]:**
   * Demographics uses prefix matching (`"Male*"`, `"Female*"`) to prevent females from being counted under Males.
   * Sleep Preferences uses multi-criteria `COUNTIFS` isolating gender and dynamically generates `=SUM(B{row}:C{row})` for the Total column.
-  * Church lodging uses prefix matching (`"Yes*"`, `"No*"`) to support bilingual `"Yes 是"` responses.
+  * Church lodging uses dual-mode matching (`cLodgingMatch`) supporting both standard headers (`I will be staying*` with `"Yes*"`/`"No*"` prefix matching) and legacy headers (`Lodging Arrangement*` / `住宿安排` with `"*host church*"` / `"*self*"` matching), preventing zero-counts on historical or bilingual forms.
   * Dietary and special needs queries use unbounded ranges (`A2:ZZ`) with multilingual "None" exclusions (`<>無`, `<>没有`).
   * Airport Summary queries sort airport passenger volumes descending (`ORDER BY COUNT(...) DESC`).
 

@@ -573,6 +573,8 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
     "Local Church": "Local Church/Place of Worship",
     "What fellowship": "Local Church/Place of Worship",
     "I will be staying at the hosting church.": "Staying at Host Church?",
+    "Lodging Arrangement": "Staying at Host Church?",
+    "住宿安排": "Staying at Host Church?",
     "I need lodging before the event": "Lodging Before",
     "I need lodging after the event": "Lodging After",
     "Food/Medicine Restrictions": "Food/Medicine Restrictions",
@@ -676,7 +678,13 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
 
   sumData.push(["Lodging Needs", "", "", ""]);
   const cLodgingMatch = (mode) => {
-     return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("I will be staying*", 'Form Responses 1'!1:1, 0)), "${mode}*"), 0)`;
+     const standardHeader = `IFERROR(MATCH("I will be staying*", 'Form Responses 1'!1:1, 0), MATCH("*我將住在主辦教會*", 'Form Responses 1'!1:1, 0))`;
+     const legacyHeader = `IFERROR(MATCH("Lodging Arrangement*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("Lodging*", 'Form Responses 1'!1:1, 0), MATCH("*住宿安排*", 'Form Responses 1'!1:1, 0)))`;
+     if (mode === "Yes") {
+       return `=IFERROR(IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${standardHeader}), "Yes*"), 0) + IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*host church*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*host church*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*主辦教會*")), 0), 0)`;
+     } else {
+       return `=IFERROR(IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${standardHeader}), "No*"), 0) + IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*self*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*self*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*自行安排*")), 0), 0)`;
+     }
   };
 
   sumData.push(["Staying at Hosting Church", cLodgingMatch("Yes"), "", ""]);
@@ -2364,7 +2372,7 @@ function masterRespondToRegistration(e) {
                    else if (logHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
                    else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
                    else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
-                   else if (logHeader === "Staying at Host Church?" && hLower.includes("staying at the hosting church")) mappedValue = val;
+                   else if (logHeader === "Staying at Host Church?" && (hLower.includes("staying at the hosting church") || hLower.includes("lodging arrangement") || hLower.includes("住宿安排"))) mappedValue = val;
                    else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
                    else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
                    else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
@@ -3829,7 +3837,7 @@ function upgradeExistingSheet() {
                    else if (logHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
                    else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
                    else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
-                   else if (logHeader === "Staying at Host Church?" && hLower.includes("staying at the hosting church")) mappedValue = val;
+                   else if (logHeader === "Staying at Host Church?" && (hLower.includes("staying at the hosting church") || hLower.includes("lodging arrangement") || hLower.includes("住宿安排"))) mappedValue = val;
                    else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
                    else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
                    else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;

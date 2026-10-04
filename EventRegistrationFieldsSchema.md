@@ -151,9 +151,10 @@ Raw, immutable responses recorded directly by Google Forms.
   * `Room Assignment` *(Manual entry)*
   * `Group/Team` *(Manual entry)*
   * `Notes` *(Manual entry)*
+* **Lodging Compatibility:** Maps both standardized questions (`I will be staying at the hosting church.`) and legacy/historical headers (`Lodging Arrangement 住宿安排`, `住宿安排`) into `Staying at Host Church?`.
 
 ### 6. `Summary Dashboard`
-* Centralized KPI dashboard aggregating Total Registrants, Travel Logistics by mode, Church Lodging, Pre/Post-Event Lodging, Dietary & Medical counts, Demographics (using prefix matching `"Male*"`, `"Female*"`), and Sleep Preferences with dynamic row sums (`=SUM(B:C)`).
+* Centralized KPI dashboard aggregating Total Registrants, Travel Logistics by mode, Church Lodging (with dual-compatibility matching modern `Yes*`/`No*` and legacy `*host church*`/`*self*` responses), Pre/Post-Event Lodging, Dietary & Medical counts, Demographics (using prefix matching `"Male*"`, `"Female*"`), and Sleep Preferences with dynamic row sums (`=SUM(B:C)`).
 
 ### 7. `Airport Summary`
 * Dynamically aggregates inbound and outbound passenger volumes by airport code, sorted in descending order (`ORDER BY COUNT(...) DESC`).
