@@ -70,8 +70,8 @@ To ensure maximum security under the principle of least privilege, event coordin
    * **Deployment Type:** Web app
    * **Execute as:** `Me (Master Admin / us.events@tjc.org)`
    * **Who has access:** `Anyone within True Jesus Church`
-   * **Deployment ID:** `AKfycbzHrbgebuFQ1O4DLgaG85jkL_Z_Hr8BZ5QINOlJK7QZ8zrgu9GU9DO0C9m_3p-sIvjUfQ`
-   * **Web App URL:** `https://script.google.com/macros/s/AKfycbzHrbgebuFQ1O4DLgaG85jkL_Z_Hr8BZ5QINOlJK7QZ8zrgu9GU9DO0C9m_3p-sIvjUfQ/exec`
+   * **Deployment ID:** `AKfycbzD07MNpPIp9YwuGhWcBEimbA-RAMk_68FJFfwUP5wBgQdK7MFIhRLhuEid9CXJMzwLAQ`
+   * **Web App URL:** `https://script.google.com/macros/s/AKfycbzD07MNpPIp9YwuGhWcBEimbA-RAMk_68FJFfwUP5wBgQdK7MFIhRLhuEid9CXJMzwLAQ/exec`
 
 2. **Master Sheet Activation:**
    * In the Master Google Sheet, navigate to **USGA Events > Advanced Maintenance > Configure Delegated Web App URL**.
