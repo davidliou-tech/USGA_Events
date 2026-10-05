@@ -787,9 +787,11 @@ function generateForm(payload) { try {
     const props = PropertiesService.getScriptProperties();
     const delegatedUrl = props.getProperty('DELEGATED_WEB_APP_URL');
 
-    // MODEL B: If Delegated Web App is configured, dispatch through the Web App
-    // so any coordinator with sheet access can generate under Master Admin privileges.
-    if (delegatedUrl) {
+    // MODEL B: If Delegated Web App is configured AND the active user is not already the Master Admin,
+    // dispatch through the Web App so coordinators generate under Master Admin privileges.
+    // If the active user is already the Master Admin / Shared Drive owner (or alias),
+    // execute directly to stamp folders/files under the master account without network overhead.
+    if (delegatedUrl && !isMasterUser) {
       payload.coordinatorEmail = activeEmail;
       payload.isDelegatedExecution = true;
       
@@ -1552,8 +1554,16 @@ function generateForm(payload) { try {
         ScriptApp.newTrigger('masterFormLifecycleCron').timeBased().everyHours(1).create();
       }
       
-      // Evaluate initial state right now on the active form
+      // Always initialize the Google Form with the custom closed message upon creation
       const now = new Date().getTime();
+      try {
+        const initialClosedMsg = (monitor[form.getId()].start && now < monitor[form.getId()].start) ? preMsgSheet : postMsgSheet;
+        form.setCustomClosedFormMessage(initialClosedMsg);
+      } catch (e) {
+        Logger.log("Could not set initial custom closed message: " + e.message);
+      }
+
+      // Evaluate initial state right now on the active form
       let shouldAccept = true;
       if (monitor[form.getId()].start && now < monitor[form.getId()].start) {
         shouldAccept = false;
@@ -1563,19 +1573,8 @@ function generateForm(payload) { try {
         shouldAccept = false;
       }
       
-      if (!shouldAccept) {
-        form.setAcceptingResponses(false);
-        try {
-          if (monitor[form.getId()].start && now < monitor[form.getId()].start) {
-            form.setCustomClosedFormMessage(preMsgSheet);
-          } else if (monitor[form.getId()].end && now > endThreshold1) {
-            form.setCustomClosedFormMessage(postMsgSheet);
-          }
-        } catch (e) {
-          Logger.log("Could not set custom closed message: " + e.message);
-        }
-      }
-  } finally {
+      form.setAcceptingResponses(shouldAccept);
+    } finally {
     genLock.releaseLock();
   }
 
