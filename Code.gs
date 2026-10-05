@@ -1306,7 +1306,7 @@ function generateForm(payload) { try {
       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
       if (idxA !== -1) return -1;
       if (idxB !== -1) return 1;
-      return 0;
+      return a.localeCompare(b);
     });
 
   let arrivalDetailsItem = null;
@@ -3113,12 +3113,13 @@ function setupFieldDictionary(ss) {
     ['Personal & Contact Info', 'Class to attend', 'Radio', true, 'E2 (Grades 4 to 6)', 'J1 (Grades 7 to 9)', 'J2 (Grades 10 to 12)'],
     ['Personal & Contact Info', 'Grade (As of September)', 'Short Answer Text', true],
     ['Personal & Contact Info', 'Minor\'s Email (at least 13 years of age)', 'Short Answer Text', false],
-    
+    ['Personal & Contact Info', 'Name of Parent/Guardian (if Participant is under 18)', 'Short Answer Text', true],
+    ['Personal & Contact Info', 'Emergency Contact Person', 'Short Answer Text', true],
+    ['Personal & Contact Info', 'Emergency Contact Relationship', 'Short Answer Text', true],
+    ['Personal & Contact Info', 'Emergency Contact Phone', 'Short Answer Text', true],
     ['Personal & Contact Info', 'Emergency Contact Evening Phone', 'Short Answer Text', false],
     
     ['Event-Specific Participation', 'Dress Code Agreement', 'Radio', true, 'Yes, I agree'],
-    ['Personal & Contact Info', 'Name of Parent/Guardian (if Participant is under 18)', 'Short Answer Text', true],
-    
     ['Event-Specific Participation', 'I will attend...', 'Dropdown', true, 'In Person', 'Online', 'Attendance tentatively unsure'],
     ['Event-Specific Participation', 'Attendance commitment', 'Radio', true, 'Full time', 'Part time'],
     ['Event-Specific Participation', 'Dates I will attend', 'Checkboxes', true, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
@@ -3158,6 +3159,10 @@ function setupFieldDictionary(ss) {
     ['Arrival Flight Details', 'Arrival Flight Number', 'Short Answer Text', true],
     ['Arrival Flight Details', 'The individuals will be arriving on the same flight', 'Paragraph', false],
 
+    ['Arrival Train/Bus Details', 'Arrival Train/Bus Station', 'Short Answer Text', true],
+    ['Arrival Train/Bus Details', 'Arrival Carrier', 'Short Answer Text', true],
+    ['Arrival Train/Bus Details', 'Arrival Train/Bus Number', 'Short Answer Text', true],
+
     ['Departure Arrangements', 'Departure Details', 'Multiple choice', true, 'I am departing by car', 'I am departing by flight', 'I am departing by train/bus', 'I do not need dropoff'],
     ['Departure Arrangements', 'Departure Date', 'Date', true],
     ['Departure Arrangements', 'Departure Time', 'Time', true],
@@ -3166,13 +3171,11 @@ function setupFieldDictionary(ss) {
     ['Departure Flight Details', 'Destination City/Airport', 'Short Answer Text', true],
     ['Departure Flight Details', 'Departure Airline', 'Short Answer Text', true],
     ['Departure Flight Details', 'Departure Flight Number', 'Short Answer Text', true],
-['Departure Flight Details', 'The individuals will be departing on the same flight', 'Paragraph', false],
-['Arrival Train/Bus Details', 'Arrival Train/Bus Station', 'Short Answer Text', true],
-['Arrival Train/Bus Details', 'Arrival Carrier', 'Short Answer Text', true],
-['Arrival Train/Bus Details', 'Arrival Train/Bus Number', 'Short Answer Text', true],
-['Departure Train/Bus Details', 'Departure Train/Bus Station', 'Short Answer Text', true],
-['Departure Train/Bus Details', 'Departure Carrier', 'Short Answer Text', true],
-['Departure Train/Bus Details', 'Departure Train/Bus Number', 'Short Answer Text', true],
+    ['Departure Flight Details', 'The individuals will be departing on the same flight', 'Paragraph', false],
+
+    ['Departure Train/Bus Details', 'Departure Train/Bus Station', 'Short Answer Text', true],
+    ['Departure Train/Bus Details', 'Departure Carrier', 'Short Answer Text', true],
+    ['Departure Train/Bus Details', 'Departure Train/Bus Number', 'Short Answer Text', true],
     
     ['Other Travel Logistics', 'My train/bus information', 'Paragraph', false],
     ['Other Travel Logistics', 'I will arrange my own ride (additional notes)', 'Paragraph', false],
@@ -3190,10 +3193,7 @@ function setupFieldDictionary(ss) {
 
     ['Releases & Feedback', 'Medical Consent and Liability Release Consent', 'Radio', true, 'Yes', 'No'],
     ['Releases & Feedback', 'General Media Release Consent', 'Radio', true, 'Yes', 'No'],
-    ['Releases & Feedback', 'Signature by Participant/Authorized Signatory', 'Short Answer Text', true],
-    ['Personal & Contact Info', 'Emergency Contact Person', 'Short Answer Text', true],
-    ['Personal & Contact Info', 'Emergency Contact Relationship', 'Short Answer Text', true],
-    ['Personal & Contact Info', 'Emergency Contact Phone', 'Short Answer Text', true]
+    ['Releases & Feedback', 'Signature by Participant/Authorized Signatory', 'Short Answer Text', true]
   ];
   
   const maxCols = Math.max(data[0].length, ...dictionary.map(row => row.length));

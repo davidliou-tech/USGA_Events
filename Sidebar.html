@@ -532,6 +532,21 @@
 
       let historicalMemory = {};
       
+      const canonicalCategoryOrder = [
+        "Personal & Contact Info",
+        "Event Participant’s Information",
+        "Event-Specific Participation",
+        "Arrival Arrangements",
+        "Arrival Flight Details",
+        "Arrival Train/Bus Details",
+        "Departure Arrangements",
+        "Departure Flight Details",
+        "Departure Train/Bus Details",
+        "Other Travel Logistics",
+        "Lodging & Accommodation",
+        "Releases & Feedback"
+      ];
+
       function initData(data) {
         masterDictionary = data.dictionary || [];
         const standardTrainFields = [
@@ -546,6 +561,13 @@
           if (!masterDictionary.find(d => d.name === tf.name)) {
             masterDictionary.push(tf);
           }
+        });
+        masterDictionary.sort((a, b) => {
+          let idxA = canonicalCategoryOrder.indexOf(a.category);
+          let idxB = canonicalCategoryOrder.indexOf(b.category);
+          if (idxA === -1) idxA = 999;
+          if (idxB === -1) idxB = 999;
+          return idxA - idxB;
         });
         masterTemplates = data.templates;
         airportMapping = data.airportMapping || {};
@@ -698,7 +720,16 @@
           byCategory[f.category].push(f);
         });
 
-        for (let cat in byCategory) {
+        const sortedCats = Object.keys(byCategory).sort((a, b) => {
+          let idxA = canonicalCategoryOrder.indexOf(a);
+          let idxB = canonicalCategoryOrder.indexOf(b);
+          if (idxA === -1) idxA = 999;
+          if (idxB === -1) idxB = 999;
+          if (idxA !== idxB) return idxA - idxB;
+          return a.localeCompare(b);
+        });
+
+        sortedCats.forEach(cat => {
           const catDiv = document.createElement('div');
           catDiv.className = 'field-category';
           const isReleaseCat = cat === 'Releases & Feedback';
