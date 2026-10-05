@@ -789,41 +789,68 @@ function generateForm(payload) { try {
       throw new Error(`Authentication Error: You are logged in as ${activeEmail || "a different account"}. You must log into the ${requiredEmail} account (or have it set as an authorized alias) to generate this form, ensuring automated receipts are sent from the correct mailbox.`);
     }
 
+    const isMasterUser = (activeEmail === requiredEmail || aliases.includes(requiredEmail));
     const props = PropertiesService.getScriptProperties();
     const delegatedUrl = props.getProperty('DELEGATED_WEB_APP_URL');
     if (delegatedUrl) {
       payload.coordinatorEmail = activeEmail;
       payload.isDelegatedExecution = true;
       
-      const token = ScriptApp.getOAuthToken();
-      const options = {
-        method: 'post',
-        contentType: 'application/json',
-        headers: {
-          Authorization: 'Bearer ' + token
-        },
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
-      };
-      
-      const response = UrlFetchApp.fetch(delegatedUrl, options);
-      const code = response.getResponseCode();
-      const text = response.getContentText();
-      
-      if (code >= 200 && code < 300) {
-        let json;
-        try {
-          json = JSON.parse(text);
-        } catch(e) {
-          throw new Error("Invalid response from delegated Web App: " + text.substring(0, 200));
-        }
-        if (json.status === 'success') {
-          return json.result;
+      let delegationError = null;
+
+      try {
+        const token = ScriptApp.getOAuthToken();
+        const options = {
+          method: 'post',
+          contentType: 'application/json',
+          headers: {
+            Authorization: 'Bearer ' + token
+          },
+          payload: JSON.stringify(payload),
+          muteHttpExceptions: true
+        };
+        
+        const response = UrlFetchApp.fetch(delegatedUrl, options);
+        const code = response.getResponseCode();
+        const text = response.getContentText();
+        
+        if (code >= 200 && code < 300) {
+          let json;
+          try {
+            json = JSON.parse(text);
+          } catch(e) {
+            throw new Error("Invalid response from delegated Web App: " + text.substring(0, 200));
+          }
+          if (json.status === 'success') {
+            return json.result;
+          } else {
+            throw new Error(json.message || "Unknown error from delegated provisioner.");
+          }
         } else {
-          throw new Error(json.message || "Unknown error from delegated provisioner.");
+          let diagnostic = "";
+          if (code === 404) {
+            diagnostic = " Web App deployment endpoint was not found (HTTP 404). The deployment may be inactive, outdated, or missing the Web App configuration.";
+          }
+          delegationError = new Error(`Delegated Service Error (HTTP ${code}):${diagnostic}\nResponse: ${text.substring(0, 200)}`);
         }
-      } else {
-        throw new Error(`Delegated Service Error (HTTP ${code}): ${text.substring(0, 300)}`);
+      } catch (err) {
+        delegationError = err;
+      }
+
+      if (delegationError) {
+        if (isMasterUser) {
+          Logger.log(`Delegated Web App call failed (${delegationError.message}). Falling back to direct execution under master account ${activeEmail}.`);
+          try {
+            SpreadsheetApp.getActiveSpreadsheet().toast(
+              `Delegated Web App endpoint unavailable. Bypassed and generating directly under ${activeEmail}.`,
+              "Direct Execution Fallback",
+              7
+            );
+          } catch(e) {}
+          payload.isDelegatedExecution = false;
+        } else {
+          throw new Error(`${delegationError.message}\n\nTroubleshooting:\n1. To generate directly, clear 'DELEGATED_WEB_APP_URL' under 'USGA Events > Advanced Maintenance > Configure Delegated Web App URL'.\n2. To use delegated execution, re-deploy the Web App in the Apps Script Editor and update the configured URL.`);
+        }
       }
     }
   }
