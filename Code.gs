@@ -779,19 +779,16 @@ function setupAirportSummarySheet(ss, hasAirportFields) {
 function generateForm(payload) { try {
   // If not already running inside delegated Web App, check if delegation is configured
   if (!payload.isDelegatedExecution) {
-    // 0. Verify Email Authorization for the coordinator initiating the generation
-    const requiredEmail = (payload.eventDetails.contactEmail || "us.events@tjc.org").toLowerCase();
     const activeEmail = Session.getActiveUser().getEmail().toLowerCase();
-    
+    const requiredEmail = (payload.eventDetails.contactEmail || "us.events@tjc.org").toLowerCase();
     const aliases = GmailApp.getAliases().map(alias => alias.toLowerCase());
-    
-    if (activeEmail !== requiredEmail && !aliases.includes(requiredEmail)) {
-      throw new Error(`Authentication Error: You are logged in as ${activeEmail || "a different account"}. You must log into the ${requiredEmail} account (or have it set as an authorized alias) to generate this form, ensuring automated receipts are sent from the correct mailbox.`);
-    }
-
     const isMasterUser = (activeEmail === requiredEmail || aliases.includes(requiredEmail));
+
     const props = PropertiesService.getScriptProperties();
     const delegatedUrl = props.getProperty('DELEGATED_WEB_APP_URL');
+
+    // MODEL B: If Delegated Web App is configured, dispatch through the Web App
+    // so any coordinator with sheet access can generate under Master Admin privileges.
     if (delegatedUrl) {
       payload.coordinatorEmail = activeEmail;
       payload.isDelegatedExecution = true;
@@ -852,11 +849,17 @@ function generateForm(payload) { try {
           throw new Error(`${delegationError.message}\n\nTroubleshooting:\n1. To generate directly, clear 'DELEGATED_WEB_APP_URL' under 'USGA Events > Advanced Maintenance > Configure Delegated Web App URL'.\n2. To use delegated execution, re-deploy the Web App in the Apps Script Editor and update the configured URL.`);
         }
       }
+    } else {
+      // Direct execution mode: Verify email authorization so automated receipts are sent from us.events@tjc.org
+      if (!isMasterUser) {
+        throw new Error(`Authentication Error: You are logged in as ${activeEmail || "a different account"}. To generate forms via Direct Execution, you must log into the ${requiredEmail} account (or have it set as an authorized alias) so automated receipts are sent from the correct mailbox. Alternatively, an administrator can configure the Delegated Web App URL under 'USGA Events > Advanced Maintenance > Configure Delegated Web App URL' to allow coordinators to generate forms directly from their own accounts.`);
+      }
     }
   }
 
   // 1. Create the new Form
   let formTitle = payload.eventDetails.title || 'Untitled USGA Event';
+  let eventTitle = formTitle;
   
   const form = FormApp.create(formTitle);
   
@@ -1523,7 +1526,7 @@ function generateForm(payload) { try {
     const props = PropertiesService.getScriptProperties();
     let monitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
     monitor[form.getId()] = {
-      title: eventTitle,
+      title: formTitle,
       start: payload.eventDetails.regStartTimestamp || (payload.eventDetails.regStartDate ? parseLocalDate(payload.eventDetails.regStartDate).getTime() : null),
       end: payload.eventDetails.regEndTimestamp || (payload.eventDetails.regEndDate ? parseLocalDate(payload.eventDetails.regEndDate).getTime() : null),
       isExactEnd: payload.eventDetails.regEndDate ? payload.eventDetails.regEndDate.includes('T') : false,

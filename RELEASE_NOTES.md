@@ -28,10 +28,13 @@ This document provides a complete, unified historical record of all versions, fe
 - **Parent/Guardian Guidance**:
   - Updated help text across all templates and generated forms for the `Name of Parent/Guardian` field to explicitly clarify: *"If participant is 18 or above, enter 'N/A'."*
   - Synchronized bilingual Traditional Chinese translation string (`若參與者年滿 18 歲以上，請填寫「N/A」`).
-- **Delegated Web App Resiliency & Direct Fallback**:
-  - Added graceful fallback to direct execution when generating forms under the Master Admin / Shared Drive owner account (`us.events@tjc.org`) if the delegated Web App URL is invalid, returns 404, or encounters connection errors, preventing generation blocking.
-  - Enhanced error diagnostics for delegated execution errors, replacing raw HTTP 404 HTML exceptions with actionable troubleshooting guidance for administrators and event coordinators.
-  - Updated `appsscript.json` manifest with explicit `webapp` configuration (`executeAs: USER_DEPLOYING`, `access: DOMAIN`) to ensure future clasp deployments preserve Web App deployment capabilities.
+- **Delegated Web App Resiliency, Coordinator Access (Model B) & Direct Fallback**:
+  - **Model B Coordinator Provisioning**: Moved email authorization verification into the direct execution fallback path. Any event coordinator with edit access to the Master Google Sheet within the domain can now generate forms via the Delegated Web App, which executes under Master Admin (`us.events@tjc.org`) service credentials and automatically grants the coordinator folder-level Editor access.
+  - **Direct Execution Safety**: Direct execution mode (when no Web App is configured) continues to enforce `us.events@tjc.org` authorization to ensure automated confirmation receipts are routed through the official mailbox.
+  - **Graceful Fallback**: Added graceful fallback to direct execution when generating forms under the Master Admin / Shared Drive owner account (`us.events@tjc.org`) if the delegated Web App URL is invalid, returns 404, or encounters connection errors, preventing generation blocking.
+  - **Lifecycle Indexing Fix (`ReferenceError`)**: Resolved `ReferenceError: eventTitle is not defined` bug during registration lifecycle indexing in `generateForm()`.
+  - **Enhanced Diagnostics**: Replaced raw HTTP 404 HTML exceptions with actionable troubleshooting guidance for administrators and event coordinators.
+  - **Manifest Configuration**: Updated `appsscript.json` manifest with explicit `webapp` configuration (`executeAs: USER_DEPLOYING`, `access: DOMAIN`) to ensure clasp deployments preserve Web App deployment capabilities.
 - **Lodging Formula & Header Compatibility (Summary Dashboard & Logistics)**:
   - **Summary Dashboard Lodging Formulas**: Enhanced `cLodgingMatch` in `setupSummaryDashboard()` to dynamically support both modern standard questions (`I will be staying at the hosting church.` / `Yes*`/`No*`) and legacy/historical event questions (e.g. `Lodging Arrangement 住宿安排` / `*host church*` vs. `*self*`, plus Traditional Chinese variants `*主辦教會*` / `*自行安排*`). Eliminates zero-counts when analyzing events created prior to recent schema standardizations.
   - **Logistics Sheet Mapping**: Added `Lodging Arrangement` and `住宿安排` to `optionalHeadersMap` in `setupLogisticsSheet()` and automated synchronization handlers (`masterRespondToRegistration` and `upgradeExistingSheet()`), ensuring legacy lodging answers correctly flow into the `Staying at Host Church?` column.
