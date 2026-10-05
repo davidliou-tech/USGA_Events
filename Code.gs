@@ -1228,6 +1228,41 @@ function generateForm(payload) { try {
      });
   }
 
+  // Auto-include Train/Bus travel logistics fields when travel details are enabled
+  const hasArrDetails = payload.selectedFields.some(f => f.name === 'Arrival Details');
+  if (hasArrDetails) {
+    const arrTrainFields = [
+      { name: 'Arrival Train/Bus Station', category: 'Arrival Train/Bus Details', type: 'Short Answer Text', required: !isMinorEvent },
+      { name: 'Arrival Carrier', category: 'Arrival Train/Bus Details', type: 'Short Answer Text', required: !isMinorEvent },
+      { name: 'Arrival Train/Bus Number', category: 'Arrival Train/Bus Details', type: 'Short Answer Text', required: !isMinorEvent }
+    ];
+    arrTrainFields.forEach(tf => {
+      const existing = payload.selectedFields.find(f => f.name === tf.name);
+      if (!existing) {
+        payload.selectedFields.push(tf);
+      } else {
+        existing.category = 'Arrival Train/Bus Details';
+      }
+    });
+  }
+
+  const hasDepDetails = payload.selectedFields.some(f => f.name === 'Departure Details');
+  if (hasDepDetails) {
+    const depTrainFields = [
+      { name: 'Departure Train/Bus Station', category: 'Departure Train/Bus Details', type: 'Short Answer Text', required: !isMinorEvent },
+      { name: 'Departure Carrier', category: 'Departure Train/Bus Details', type: 'Short Answer Text', required: !isMinorEvent },
+      { name: 'Departure Train/Bus Number', category: 'Departure Train/Bus Details', type: 'Short Answer Text', required: !isMinorEvent }
+    ];
+    depTrainFields.forEach(tf => {
+      const existing = payload.selectedFields.find(f => f.name === tf.name);
+      if (!existing) {
+        payload.selectedFields.push(tf);
+      } else {
+        existing.category = 'Departure Train/Bus Details';
+      }
+    });
+  }
+
   // 4. Group selected fields by Category
   const fieldsByCategory = {};
   payload.selectedFields.forEach(field => {
@@ -1249,7 +1284,30 @@ function generateForm(payload) { try {
     fieldsByCategory[cat].push(field);
   });
 
-  const categories = Object.keys(fieldsByCategory).filter(c => c !== "_FINAL_RELEASES_");
+  const canonicalCategoryOrder = [
+    "Personal & Contact Info",
+    "Event Participant’s Information",
+    "Event-Specific Participation",
+    "Arrival Arrangements",
+    "Arrival Flight Details",
+    "Arrival Train/Bus Details",
+    "Departure Arrangements",
+    "Departure Flight Details",
+    "Departure Train/Bus Details",
+    "Other Travel Logistics",
+    "Lodging & Accommodation"
+  ];
+
+  const categories = Object.keys(fieldsByCategory)
+    .filter(c => c !== "_FINAL_RELEASES_")
+    .sort((a, b) => {
+      const idxA = canonicalCategoryOrder.indexOf(a);
+      const idxB = canonicalCategoryOrder.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return 0;
+    });
 
   let arrivalDetailsItem = null;
   let departureDetailsItem = null;
@@ -1322,6 +1380,8 @@ function generateForm(payload) { try {
     }
     if (arrivalTrainSection) {
       choices.push(arrivalDetailsItem.createChoice(t('I am arriving by train/bus'), arrivalTrainSection));
+    } else {
+      choices.push(arrivalDetailsItem.createChoice(t('I am arriving by train/bus'), defaultNext));
     }
     choices.push(arrivalDetailsItem.createChoice(t('I do not need pickup'), defaultNext));
     arrivalDetailsItem.setChoices(choices);
@@ -1346,6 +1406,8 @@ function generateForm(payload) { try {
     }
     if (departureTrainSection) {
       choices.push(departureDetailsItem.createChoice(t('I am departing by train/bus'), departureTrainSection));
+    } else {
+      choices.push(departureDetailsItem.createChoice(t('I am departing by train/bus'), target));
     }
     choices.push(departureDetailsItem.createChoice(t('I do not need dropoff'), target));
     
@@ -1906,10 +1968,10 @@ if (field.name === 'Arrival City/Airport' || field.name === 'Departure City/Airp
     const nameLower = field.name.toLowerCase();
     
     if (nameLower === 'arrival details') {
-       item.setChoiceValues([t('I am arriving by car'), t('I am arriving by flight'), t('I do not need pickup')]);
+       item.setChoiceValues([t('I am arriving by car'), t('I am arriving by flight'), t('I am arriving by train/bus'), t('I do not need pickup')]);
        // These will be overwritten by navigation logic if applicable
     } else if (nameLower === 'departure details') {
-       item.setChoiceValues([t('I am departing by car'), t('I am departing by flight'), t('I do not need dropoff')]);
+       item.setChoiceValues([t('I am departing by car'), t('I am departing by flight'), t('I am departing by train/bus'), t('I do not need dropoff')]);
        // These will be overwritten by navigation logic if applicable
     } else if (field.options && field.options.length > 0) {
        let finalOptions = field.options;
@@ -3233,15 +3295,23 @@ function translateText(text, targetLanguages) {
       'Arrival Arrangements': '抵達安排',
       'Arrival Flight Details': '抵達航班詳情',
       'Arrival Train/Bus Details': '搭乘火車/巴士抵達詳情',
+      'Arrival Train Details': '搭乘火車抵達詳情',
       'Departure Arrangements': '出發安排',
       'Departure Flight Details': '出發航班詳情',
       'Departure Train/Bus Details': '搭乘火車/巴士出發詳情',
+      'Departure Train Details': '搭乘火車出發詳情',
       'Arrival Train/Bus Station': '抵達火車/公車站',
+      'Arrival Train Station': '抵達火車站',
       'Departure Train/Bus Station': '出發火車/公車站',
+      'Departure Train Station': '出發火車站',
       'Arrival Carrier': '抵達客運/鐵路公司',
       'Departure Carrier': '出發客運/鐵路公司',
       'Arrival Train/Bus Number': '抵達車次/班次',
+      'Arrival Train Number': '抵達車次/班次',
       'Departure Train/Bus Number': '出發車次/班次',
+      'Departure Train Number': '出發車次/班次',
+      'I am arriving by train': '我搭乘火車抵達',
+      'I am departing by train': '我搭乘火車出發',
       'Come and See': '你們來看',
       'Other Special Needs/Accommodations (e.g., mobility assistance)': '其他活動期間之特殊需求或協助事項 (例如：行動輔助)',
       'Age': '年齡',

@@ -533,7 +533,20 @@
       let historicalMemory = {};
       
       function initData(data) {
-        masterDictionary = data.dictionary;
+        masterDictionary = data.dictionary || [];
+        const standardTrainFields = [
+          { category: 'Arrival Train/Bus Details', name: 'Arrival Train/Bus Station', type: 'Short Answer Text', required: true, options: [] },
+          { category: 'Arrival Train/Bus Details', name: 'Arrival Carrier', type: 'Short Answer Text', required: true, options: [] },
+          { category: 'Arrival Train/Bus Details', name: 'Arrival Train/Bus Number', type: 'Short Answer Text', required: true, options: [] },
+          { category: 'Departure Train/Bus Details', name: 'Departure Train/Bus Station', type: 'Short Answer Text', required: true, options: [] },
+          { category: 'Departure Train/Bus Details', name: 'Departure Carrier', type: 'Short Answer Text', required: true, options: [] },
+          { category: 'Departure Train/Bus Details', name: 'Departure Train/Bus Number', type: 'Short Answer Text', required: true, options: [] }
+        ];
+        standardTrainFields.forEach(tf => {
+          if (!masterDictionary.find(d => d.name === tf.name)) {
+            masterDictionary.push(tf);
+          }
+        });
         masterTemplates = data.templates;
         airportMapping = data.airportMapping || {};
         historicalMemory = data.history || {};
@@ -632,6 +645,18 @@
             checkedFieldNames.push(rf.name);
           }
         });
+
+        // Auto-check Train/Bus fields when Arrival Details or Departure Details are checked
+        if (checkedFieldNames.includes('Arrival Details')) {
+          ['Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number'].forEach(name => {
+            if (!checkedFieldNames.includes(name)) checkedFieldNames.push(name);
+          });
+        }
+        if (checkedFieldNames.includes('Departure Details')) {
+          ['Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number'].forEach(name => {
+            if (!checkedFieldNames.includes(name)) checkedFieldNames.push(name);
+          });
+        }
 
         // Render the full list, checking preset fields and leaving optional fields unchecked
         renderFields(fieldsToRender, checkedFieldNames);
