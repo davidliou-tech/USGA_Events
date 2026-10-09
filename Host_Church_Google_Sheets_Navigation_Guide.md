@@ -12,19 +12,19 @@ Your event spreadsheet contains several specialized tabs. Each tab serves a dedi
 
 | Sheet Tab | Purpose & Workflow | Who Uses It |
 | :--- | :--- | :--- |
-| **`Room Inventory`** | **Facility & Bed Capacity Planner:** Enter your building names, room names, gender designations, and max capacities. Automatically tracks assigned occupants and remaining capacity. | Host Church Lodging Coordinator |
+| **`Room Inventory`** | **Facility & Sleeping Arrangements Planner:** Enter your building names, room names, gender designations, and max capacities. Automatically tracks assigned occupants and remaining capacity. | Host Church Lodging Coordinator |
 | **`Lodging`** | **Dedicated Church Lodging Roster:** Filtered to *only* participants staying at the host church. Contains sleep habits, lodging dates, bedding requests, and room assignment dropdowns. | Host Church Lodging Team |
 | **`Logistics`** | **General On-Site Roster & Grouping:** Master list of all attendees for event check-in, dietary restrictions, special needs, emergency contacts, and discussion `Group/Team` assignments. | General Coordinator, Food / Kitchen Team, Program Leads |
 | **`Pickup`** | **Inbound Airport & Transit Roster:** Flight, train, and bus arrivals sorted chronologically by date/time. Assign volunteer drivers directly in the sheet. | Transportation Team / Shuttle Drivers |
 | **`Drop-Off`** | **Outbound Airport & Transit Roster:** Outbound travel details sorted chronologically. Assign volunteer return drivers. | Transportation Team / Shuttle Drivers |
-| **`Summary Dashboard`** | **Real-Time Event Statistics:** Instant counts of total registrants, meal counts, dietary restrictions, airport shuttle volumes, and room capacity vs. assigned beds. | Lead Event Coordinators & Pastors |
+| **`Summary Dashboard`** | **Real-Time Event Statistics:** Instant counts of total registrants, meal counts, dietary restrictions, airport shuttle volumes, and room capacity vs. assigned occupants. | Lead Event Coordinators & Pastors |
 | **`Airport Summary`** | **Airport Breakdown:** Counts arrivals and departures grouped by airport code to plan large van/bus shuttle runs. | Transportation Team |
 | **`Participants`** | **Public Attendee List:** Simple roster of registered participants (safe to publish to web so members know who is attending). | Registrants / Public |
 | **`Form Responses 1`** | **Raw Data Vault:** Unedited form submissions directly from Google Forms. *(Do not edit or delete).* | System / Archive |
 
 ---
 
-## 1. Facility & Bed Planning: `Room Inventory`
+## 1. Facility & Sleeping Arrangements: `Room Inventory`
 
 The **`Room Inventory`** tab is where the host church defines its physical facilities. It acts as the master directory for all dorms, classrooms, and hotel rooms.
 
@@ -56,7 +56,7 @@ Do not edit these columns—they calculate in real time as rooms are assigned on
 
 * **Column F (`Room Assignment Key`):** Automatically combines `Building Name - Room Name / #`. This exact text is what appears in the `Room Assignment` dropdown on the `Lodging` tab.
 * **Column G (`Assigned Count`):** Automatically counts active participants assigned to this room on the `Lodging` tab.
-* **Column H (`Remaining Capacity`):** Calculates remaining open beds (`Max Capacity - Assigned Count`) with instant color warnings:
+* **Column H (`Remaining Capacity`):** Calculates remaining open sleeping spots (`Max Capacity - Assigned Count`) with instant color warnings:
   * 🟢 **Green Background:** Open spots available (`> 0`).
   * 🟡 **Yellow Background:** Room is full (`0` spots left).
   * 🔴 **Bold Red Background:** Room is over capacity! More people have been assigned than the room can hold.
@@ -132,7 +132,7 @@ The **`Summary Dashboard`** tab gives pastors, lead coordinators, and head chefs
 * **Travel Logistics:** Total arriving and departing by flight, train/bus, or personal car.
 * **Lodging Needs & Room Capacity:**
   * Number of participants staying at church vs. self-arranged.
-  * Total bed capacity defined in `Room Inventory`.
+  * Total room sleeping capacity defined in `Room Inventory`.
   * Total occupants assigned to rooms.
   * Total remaining room capacity across the entire church.
   * Requests for lodging before or after the official event dates.

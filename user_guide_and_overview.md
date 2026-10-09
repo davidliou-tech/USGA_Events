@@ -97,7 +97,7 @@ When attendees register, their data automatically populates the specialized tabs
   * **Room Assignment Dropdown:** Linked directly to the *Room Inventory* sheet. Selecting a room automatically displays the building and updates room capacity counts. If a participant later changes their response to self-arranged lodging, their row is marked `CANCELLED` with a strikethrough so their room spot is freed up immediately.
   * **Manual Columns:** Assign *Room Assignment*, *Building*, *Bed / Spot*, and *Lodging Notes* without interfering with automated registration sorting.
 
-* **Room Inventory Sheet (Host Church Building & Capacity Planner):**
+* **Room Inventory Sheet (Host Church Building & Sleeping Arrangements Planner):**
   * A dedicated sheet where host church logistics teams define their physical facility: *Building Name*, *Room Name / #*, *Gender / Designation* (Male, Female, Family, Staff, Any), *Max Capacity*, and *Room Notes*.
   * **Live Capacity Tracking:** Pre-built formulas automatically calculate *Assigned Count* and *Remaining Capacity* (green when spots are open, yellow when full, and bold red if over-capacity).
   * **Live Room Rosters:** Column I (*Assigned Occupants*) automatically lists every person assigned to each room in real time.
