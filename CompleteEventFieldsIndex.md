@@ -71,6 +71,7 @@ This document provides an exhaustive, alphabetical catalog of all **77 unique fi
 | 60 | **Last Name** | Personal & Contact Info | Short Answer Text | Yes | Participant legal last name; part of composite matching key. |
 | 61 | **List instrument you will bring** | Event-Specific Participation | Short Answer Text | No | Musical instrument for camp orchestra/worship. |
 | 62 | **Local Church** | Personal & Contact Info | Short Answer Text | Yes | Home church affiliation. |
+| 63 | **Lodging Arrangement 住宿安排** | Lodging & Accommodation | Radio | Yes | `Lodging at host church / 主辦教會安排住宿`, `Self-arranged lodging & transit / 自行安排住行` (Standard for NCC & Ministers Workshop). |
 | 63 | **Medical Consent and Liability Release Consent** | Releases & Feedback | Radio | Yes | Strict legal release; "No" triggers auto-rejection. |
 | 64 | **Minor's Email (at least 13 years of age)** | Personal & Contact Info | Short Answer Text | No | Direct youth contact; excluded from receipts. |
 | 65 | **My current age group** | Personal & Contact Info | Radio | Yes | `12-14`, `15-18`, `19-25`, `26-35`, `36-50`, `51+` |

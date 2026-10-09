@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.2 (Current) - Maintenance & Lifecycle Optimization](#version-292)
+- [Version 2.9.3 (Current) - Host Church Logistics, Lodging Standardization & International Phone Fix](#version-293)
+- [Version 2.9.2 - Maintenance & Lifecycle Optimization](#version-292)
 - [Version 2.9.1 - Active Events Performance & System Log Auto-Sync](#version-291)
 - [Version 2.9.0 - Multi-Child Composite Key Fix & Translation Engine Optimization](#version-290)
 - [Version 2.8.0 - Dual Window UI, Settings Tabs & End-to-End Transit Logistics](#version-280)
@@ -17,6 +18,41 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-293"></a>
+## Version 2.9.3
+*October 2026*
+
+### Host Church Logistics & Lodging Standardization
+- **Guaranteed "Staying at Host Church?" Column in Logistics Tab**:
+  - Implemented `isStayingAtChurchField()` helper supporting all phrasing variations (`"staying at the hosting church"`, `"staying at church"`, `"staying at host church"`, `"lodging arrangement"`, `"住宿安排"`, `"我將住在主辦教會"`, `"church lodging"`).
+  - Updated `setupLogisticsSheet()` to ensure `"Staying at Host Church?"` is always included on the Logistics tab whenever any church stay or lodging question is asked.
+  - Added automated conditional formatting on the `"Staying at Host Church?"` column: highlights on-site stays in soft green (`#e6f4ea`, font `#137333`) and self-arranged lodging in subtle gray (`#f1f3f4`, font `#5f6368`) for instantaneous visual scanning by host church planning teams.
+- **Targeted Lodging Arrangement Optionality (NCC & Ministers Workshop)**:
+  - Standardized the `National Church Conference (NCC)` and `USGA Ministers Workshop` templates to specifically present the official bilingual lodging optionality:
+    - **Question**: `Lodging Arrangement 住宿安排` (Required `*`)
+    - **Options**:
+      - `Lodging at host church / 主辦教會安排住宿`
+      - `Self-arranged lodging & transit / 自行安排住行`
+  - Added `'Lodging Arrangement 住宿安排'` to the Master Field Dictionary with predefined bilingual choices.
+  - Updated `generateForm()` and `addFieldToForm()` to automatically enforce this exact question title and options for NCC and Ministers Workshop, while keeping other youth convocations, camps, and seminars free from unneeded lodging arrangement optionality.
+  - Updated `Sidebar.html` to automatically check `'Lodging Arrangement 住宿安排'` only when NCC or Ministers Workshop templates are selected.
+- **Real-Time & Historical Synchronization**:
+  - Updated `masterRespondToRegistration()` and `upgradeExistingSheet()` with `isStayingAtChurchField()` to reliably map responses into `"Staying at Host Church?"`.
+  - Upgraded `upgradeExistingSheet()` to automatically preserve any existing manual entries (`Room Assignment`, `Group/Team`, `Notes`) from `Logistics_Old`.
+- **New Non-Destructive Logistics Syncer (`syncLogisticsStayingAtChurchMenu`)**:
+  - Added `USGA Events -> Advanced Maintenance -> Sync Logistics "Staying at Church" Column` to safely insert and backfill the `"Staying at Host Church?"` column into already-shared event spreadsheets in place without disturbing existing coordinator assignments or notes.
+
+### International Phone Number `#ERROR!` Prevention & Auto-Repair
+- **Root Cause Resolution (`formatSheetTextValue`)**:
+  - **Issue**: When Google Forms writes an international phone number starting with `+` (e.g., `+54 1166513382`) into `Form Responses 1`, it prepends a hidden text-escape apostrophe (`'`). When `getDisplayValues()` read those strings and wrote them to `Logistics`, `Pickup`, and `Drop-Off` via `appendRow()` / `setValues()`, the leading apostrophe was stripped, causing Google Sheets to parse `+54 1166513382` as a broken arithmetic formula (`#ERROR!`).
+  - **Fix**: Added `formatSheetTextValue(val, isPhoneField)` to automatically prefix phone numbers and any text values starting with `+`, `-`, or `=` with a leading apostrophe (`'`), forcing Google Sheets to store them as literal text and preserving leading zeros.
+- **Plain Text Column Formatting (`@`)**:
+  - Updated `setupTransportationSheets()` and `setupLogisticsSheet()` to explicitly set `.setNumberFormat("@")` on `Phone`, `Phone Number`, `Emergency Contact Phone`, and `Driver Phone Number` columns.
+- **Automated In-Place `#ERROR!` Repair**:
+  - Updated `masterRespondToRegistration()`, `upgradeExistingSheet()`, and `syncLogisticsStayingAtChurchColumn()` so that both live submissions/edits and maintenance syncs automatically restore and format `Phone` and `Emergency Contact Phone` values as Plain Text across `Logistics`, `Pickup`, and `Drop-Off` tabs without overwriting manual coordinator notes or room assignments.
 
 ---
 

@@ -680,6 +680,17 @@
           });
         }
 
+        // Lodging arrangement optionality handling:
+        // Typically only the National Church Conference and Ministers Workshop allow for this lodging arrangement optionality.
+        const isNccOrMinisters = selected.includes('NCC') || 
+                                 selected.includes('National Church Conference') || 
+                                 selected.toLowerCase().includes('ministers workshop');
+        if (isNccOrMinisters) {
+          if (!checkedFieldNames.includes('Lodging Arrangement 住宿安排')) {
+            checkedFieldNames.push('Lodging Arrangement 住宿安排');
+          }
+        }
+
         // Render the full list, checking preset fields and leaving optional fields unchecked
         renderFields(fieldsToRender, checkedFieldNames);
       }
@@ -764,7 +775,7 @@
           });
 
           container.appendChild(catDiv);
-        }
+        });
         
         // Re-apply filter if user was searching
         filterFields();

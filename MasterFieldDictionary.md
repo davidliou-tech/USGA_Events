@@ -120,6 +120,7 @@ This document represents the definitive **Master Field Dictionary** of the USGA 
 
 | Field Name | Input Type | Required | Options / Details |
 |---|---|:---:|---|
+| **Lodging Arrangement 住宿安排** | Radio | Yes | `Lodging at host church / 主辦教會安排住宿`, `Self-arranged lodging & transit / 自行安排住行` (Standard for NCC & Ministers Workshop) |
 | **I will be staying at the hosting church.** | Radio | Yes | `Yes`, `No` |
 | **Specify exact dates of arrival/departure for lodging** | Paragraph | No | Custom arrival/departure dates. |
 | **I need lodging before the event** | Radio | Yes | `Yes`, `No` (Appends target date context). |

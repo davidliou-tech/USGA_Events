@@ -20,6 +20,7 @@ function onOpen() {
       .addSubMenu(ui.createMenu('Advanced Maintenance')
           .addItem('Sync Active Events from System Log', 'syncActiveEventsFromSystemLogMenu')
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
+          .addItem('Sync Logistics "Staying at Church" Column', 'syncLogisticsStayingAtChurchMenu')
           .addItem('Clean Up Dead Triggers', 'cleanupDeadTriggers')
           .addItem('Delete ALL Triggers (Reset)', 'deleteAllTriggers')
           .addSeparator()
@@ -514,6 +515,22 @@ function getConfigData() {
 // MODULAR SHEET BUILDERS (SHARED BETWEEN GENERATOR & UPGRADE TOOL)
 // =======================================================================
 
+/**
+ * Prevents Google Sheets from interpreting text values starting with +, -, or = as formulas
+ * (e.g., international phone numbers like "+54 1166513382" causing #ERROR!, or
+ * leading-zero phone numbers losing their leading zero).
+ */
+function formatSheetTextValue(val, isPhoneField) {
+  if (val === null || val === undefined) return "";
+  const str = String(val).trim();
+  if (!str) return "";
+  if (str.startsWith("'")) return str;
+  if (isPhoneField || /^[+=\-]/.test(str)) {
+    return "'" + str;
+  }
+  return str;
+}
+
 function setupTransportationSheets(ss) {
   let pickupSheet = ss.getSheetByName("Pickup");
   if (!pickupSheet) {
@@ -529,6 +546,10 @@ function setupTransportationSheets(ss) {
   ]);
   pickupSheet.getRange(1, 1, 1, pickupSheet.getLastColumn()).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
   pickupSheet.setFrozenRows(1);
+  if (pickupSheet.getMaxRows() > 1) {
+    pickupSheet.getRange(2, 4, pickupSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    pickupSheet.getRange(2, 17, pickupSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+  }
   if (!pickupSheet.getFilter()) {
     pickupSheet.getRange(1, 1, pickupSheet.getMaxRows(), pickupSheet.getLastColumn()).createFilter();
   }
@@ -547,11 +568,31 @@ function setupTransportationSheets(ss) {
   ]);
   dropoffSheet.getRange(1, 1, 1, dropoffSheet.getLastColumn()).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
   dropoffSheet.setFrozenRows(1);
+  if (dropoffSheet.getMaxRows() > 1) {
+    dropoffSheet.getRange(2, 4, dropoffSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    dropoffSheet.getRange(2, 17, dropoffSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+  }
   if (!dropoffSheet.getFilter()) {
     dropoffSheet.getRange(1, 1, dropoffSheet.getMaxRows(), dropoffSheet.getLastColumn()).createFilter();
   }
 
   return { pickupSheet: pickupSheet, dropoffSheet: dropoffSheet };
+}
+
+function isStayingAtChurchField(fieldName) {
+  if (!fieldName) return false;
+  const lower = String(fieldName).toLowerCase().trim();
+  return lower.includes("staying at the hosting church") ||
+         lower.includes("staying at church") ||
+         lower.includes("staying at host church") ||
+         (lower.includes("stay") && lower.includes("church")) ||
+         lower.includes("lodging arrangement") ||
+         lower.includes("住宿安排") ||
+         lower.includes("我將住在主辦教會") ||
+         lower.includes("住在主辦教會") ||
+         lower.includes("住在教會") ||
+         lower.includes("church lodging") ||
+         lower.includes("host church lodging");
 }
 
 function setupLogisticsSheet(ss, selectedFieldNames) {
@@ -574,6 +615,7 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
     "What fellowship": "Local Church/Place of Worship",
     "I will be staying at the hosting church.": "Staying at Host Church?",
     "Lodging Arrangement": "Staying at Host Church?",
+    "Lodging Arrangement 住宿安排": "Staying at Host Church?",
     "住宿安排": "Staying at Host Church?",
     "I need lodging before the event": "Lodging Before",
     "I need lodging after the event": "Lodging After",
@@ -593,11 +635,17 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
   
   for (const [key, headerStr] of Object.entries(optionalHeadersMap)) {
     if (key.includes("Local Church") || key.includes("What fellowship")) continue;
+    if (headerStr === "Staying at Host Church?") continue; // Handled comprehensively below
     if (names.some(n => n.includes(key))) {
       if (!logHeaders.includes(headerStr)) {
          logHeaders.push(headerStr);
       }
     }
+  }
+
+  // Include Staying at Host Church if any staying at church or lodging arrangement question was asked
+  if (names.some(isStayingAtChurchField) && !logHeaders.includes("Staying at Host Church?")) {
+      logHeaders.push("Staying at Host Church?");
   }
 
   if (names.some(n => n === "I need lodging before the event") && !logHeaders.includes("Lodging Before")) {
@@ -627,6 +675,44 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
   for (let i = 3; i <= logHeaders.length; i++) {
      logisticsSheet.setColumnWidth(i, 200);
   }
+
+  // Format Phone and Emergency Contact Phone columns as Plain Text (@) to prevent international "+..." #ERROR! formula parse errors
+  if (logisticsSheet.getMaxRows() > 1) {
+    const phoneColIdx = logHeaders.indexOf("Phone") + 1;
+    if (phoneColIdx > 0) {
+      logisticsSheet.getRange(2, phoneColIdx, logisticsSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    }
+    const emgPhoneColIdx = logHeaders.indexOf("Emergency Contact Phone") + 1;
+    if (emgPhoneColIdx > 0) {
+      logisticsSheet.getRange(2, emgPhoneColIdx, logisticsSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    }
+  }
+
+  // Apply conditional formatting for Staying at Host Church? (soft green for Yes / Host Church, soft gray for No / Self)
+  const stayingColIdx = logHeaders.indexOf("Staying at Host Church?") + 1;
+  if (stayingColIdx > 0 && logisticsSheet.getMaxRows() > 1) {
+    const topCellA1 = logisticsSheet.getRange(2, stayingColIdx).getA1Notation();
+    const stayingRange = logisticsSheet.getRange(2, stayingColIdx, logisticsSheet.getMaxRows() - 1, 1);
+    
+    const yesRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=REGEXMATCH(TO_TEXT(${topCellA1}), "(?i)yes|host church|主辦教會")`)
+      .setBackground("#e6f4ea")
+      .setFontColor("#137333")
+      .setRanges([stayingRange])
+      .build();
+      
+    const noRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=REGEXMATCH(TO_TEXT(${topCellA1}), "(?i)no|self|自行安排")`)
+      .setBackground("#f1f3f4")
+      .setFontColor("#5f6368")
+      .setRanges([stayingRange])
+      .build();
+      
+    const existingRules = logisticsSheet.getConditionalFormatRules() || [];
+    existingRules.push(yesRule, noRule);
+    logisticsSheet.setConditionalFormatRules(existingRules);
+  }
+
   if (!logisticsSheet.getFilter()) {
     logisticsSheet.getRange(1, 1, logisticsSheet.getMaxRows(), logHeaders.length).createFilter();
   }
@@ -678,7 +764,7 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
 
   sumData.push(["Lodging Needs", "", "", ""]);
   const cLodgingMatch = (mode) => {
-     const standardHeader = `IFERROR(MATCH("I will be staying*", 'Form Responses 1'!1:1, 0), MATCH("*我將住在主辦教會*", 'Form Responses 1'!1:1, 0))`;
+     const standardHeader = `IFERROR(MATCH("I will be staying*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*staying*church*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*我將住在主辦教會*", 'Form Responses 1'!1:1, 0), MATCH("*住在教會*", 'Form Responses 1'!1:1, 0))))`;
      const legacyHeader = `IFERROR(MATCH("Lodging Arrangement*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("Lodging*", 'Form Responses 1'!1:1, 0), MATCH("*住宿安排*", 'Form Responses 1'!1:1, 0)))`;
      if (mode === "Yes") {
        return `=IFERROR(IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${standardHeader}), "Yes*"), 0) + IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*host church*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*host church*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*主辦教會*")), 0), 0)`;
@@ -1179,9 +1265,43 @@ function generateForm(payload) { try {
     ])
     .setRequired(true);
 
-  // Force Lodging Fields to ALWAYS be present across all templates
-  const hasBefore = payload.selectedFields.some(f => f.name === 'I need lodging before the event');
-  const hasAfter = payload.selectedFields.some(f => f.name === 'I need lodging after the event');
+  // Lodging arrangement optionality handling:
+  // Typically only the National Church Conference and Ministers Workshop allow for this lodging arrangement optionality.
+  const templateName = (payload.eventDetails && payload.eventDetails.templateName) ? payload.eventDetails.templateName : formTitle;
+  const isNccOrMinisters = templateName.toLowerCase().includes('ncc') || 
+                           templateName.toLowerCase().includes('national church conference') ||
+                           templateName.toLowerCase().includes('ministers workshop');
+
+  const hasStayChurch = payload.selectedFields.some(f => isStayingAtChurchField(f.name));
+  
+  if (isNccOrMinisters) {
+     // For NCC and Ministers Workshop, enforce the specific bilingual question & choices
+     let stayField = payload.selectedFields.find(f => isStayingAtChurchField(f.name));
+     if (!stayField) {
+        payload.selectedFields.push({
+            name: 'Lodging Arrangement 住宿安排',
+            category: 'Lodging & Accommodation',
+            type: 'Radio',
+            required: true,
+            options: [
+              'Lodging at host church / 主辦教會安排住宿',
+              'Self-arranged lodging & transit / 自行安排住行'
+            ]
+        });
+     } else {
+        stayField.name = 'Lodging Arrangement 住宿安排';
+        stayField.type = 'Radio';
+        stayField.required = true;
+        stayField.options = [
+          'Lodging at host church / 主辦教會安排住宿',
+          'Self-arranged lodging & transit / 自行安排住行'
+        ];
+     }
+  } else if (hasStayChurch) {
+     // For other events where church staying was selected, ensure it is required
+     const stayField = payload.selectedFields.find(f => isStayingAtChurchField(f.name));
+     if (stayField) stayField.required = true;
+  }
   
   if (!hasBefore) {
      payload.selectedFields.push({
@@ -1709,6 +1829,31 @@ function addFieldToForm(form, field, payload) {
     return item;
   }
 
+  const tmplName = (payload.eventDetails && payload.eventDetails.templateName) ? payload.eventDetails.templateName : (payload.eventDetails && payload.eventDetails.title ? payload.eventDetails.title : '');
+  const isNccOrMinistersEvent = tmplName.toLowerCase().includes('ncc') || 
+                                tmplName.toLowerCase().includes('national church conference') ||
+                                tmplName.toLowerCase().includes('ministers workshop');
+
+  if (field.name === 'Lodging Arrangement 住宿安排' || 
+      field.name === 'Lodging Arrangement' ||
+      field.name === '住宿安排' ||
+      (isNccOrMinistersEvent && isStayingAtChurchField(field.name))) {
+    item = form.addMultipleChoiceItem().setTitle('Lodging Arrangement 住宿安排');
+    item.setChoiceValues([
+      'Lodging at host church / 主辦教會安排住宿',
+      'Self-arranged lodging & transit / 自行安排住行'
+    ]);
+    item.setRequired(true);
+    return item;
+  }
+
+  if (field.name === 'I will be staying at the hosting church.') {
+    item = form.addMultipleChoiceItem().setTitle(t(field.name));
+    item.setChoiceValues([t('Yes'), t('No')]);
+    item.setRequired(true);
+    return item;
+  }
+
   if (field.name === 'Age') {
     item = form.addTextItem().setTitle(t(field.name));
     const ageValidation = FormApp.createTextValidation()
@@ -2212,7 +2357,7 @@ function masterRespondToRegistration(e) {
         let val = responses[header][0];
         
         if (hLower.includes("last name")) lastName = val;
-        else if (hLower.includes("phone") && !hLower.includes("emergency")) phone = val;
+        else if (hLower.includes("phone") && !hLower.includes("emergency")) phone = formatSheetTextValue(val, true);
         else if (hLower.includes("arrival details") || hLower.includes("arrival arrangements") || hLower.includes("arriving by")) arrDetails = val;
         else if (hLower.includes("arrival date")) arrDate = val;
         else if (hLower.includes("arrival time")) arrTime = val;
@@ -2463,7 +2608,7 @@ function masterRespondToRegistration(e) {
                    else if (logHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
                    else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
                    else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
-                   else if (logHeader === "Staying at Host Church?" && (hLower.includes("staying at the hosting church") || hLower.includes("lodging arrangement") || hLower.includes("住宿安排"))) mappedValue = val;
+                   else if (logHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
                    else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
                    else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
                    else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
@@ -2471,10 +2616,11 @@ function masterRespondToRegistration(e) {
                    else if (logHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
                    else if (logHeader === "Emergency Contact Person" && hLower.includes("emergency contact person")) mappedValue = val;
                    else if (logHeader === "Emergency Contact Relationship" && hLower.includes("emergency contact relationship")) mappedValue = val;
-                   else if (logHeader === "Emergency Contact Phone" && hLower.includes("emergency contact phone") && !hLower.includes("evening")) mappedValue = val;
+                   else if (logHeader === "Emergency Contact Phone" && hLower.includes("emergency contact phone") && !hLower.includes("evening")) mappedValue = formatSheetTextValue(val, true);
                }
            }
-           newRowData.push(mappedValue);
+           const isPhoneCol = (logHeader === "Phone" || logHeader === "Emergency Contact Phone");
+           newRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
         }
 
         if (foundRowIndex !== -1) {
@@ -3180,6 +3326,7 @@ function setupFieldDictionary(ss) {
     ['Other Travel Logistics', 'My train/bus information', 'Paragraph', false],
     ['Other Travel Logistics', 'I will arrange my own ride (additional notes)', 'Paragraph', false],
 
+    ['Lodging & Accommodation', 'Lodging Arrangement 住宿安排', 'Radio', true, 'Lodging at host church / 主辦教會安排住宿', 'Self-arranged lodging & transit / 自行安排住行'],
     ['Lodging & Accommodation', 'I will be staying at the hosting church.', 'Radio', true, 'Yes', 'No'],
     ['Lodging & Accommodation', 'Specify exact dates of arrival/departure for lodging', 'Paragraph', false],
     ['Lodging & Accommodation', 'I need lodging before the event', 'Radio', true, 'Yes', 'No'],
@@ -3238,9 +3385,9 @@ function setupTemplates(ss) {
     ['Pioneer Volunteer Ministry Program (PMVP)', 'First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Local Church', 'Birth year', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'I will be staying at the hosting church.'],
     ['National Youth Servitude Training (NYST)', 'First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event'],
     ['National Youth Fellowship (NYF)', 'First Name', 'Last Name', 'Email', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Are you in: College/Working', 'Participant can help with the following', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Medical Consent and Liability Release Consent', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Date', 'Arrival Time', 'Arrival Airline', 'Arrival Flight Number', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number'],
-    ['USGA Ministers Workshop', 'First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Local Church', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event'],
+    ['USGA Ministers Workshop', 'First Name', 'Last Name', 'Email', 'Phone', 'Gender', 'Local Church', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Lodging Arrangement 住宿安排'],
     ['National Adult Theological Seminar (NATS)', 'First Name', 'Last Name', 'Email', 'Birth year', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'I will be staying at the hosting church.'],
-    ['National Church Conference (NCC)', 'First Name', 'Last Name', 'Local Church', 'Email', 'Phone', 'Gender', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event'],
+    ['National Church Conference (NCC)', 'First Name', 'Last Name', 'Local Church', 'Email', 'Phone', 'Gender', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Lodging Arrangement 住宿安排'],
     ['Student Spiritual Convocation (SSC)', 'First Name', 'Last Name', 'Class to attend', 'Grade (As of September)', 'Gender', 'Local Church', 'Age', 'Name of Parent/Guardian (if Participant is under 18)', 'Email', 'Minor\'s Email (at least 13 years of age)', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Do you need someone to interpret for you in class?', 'Interpretation Language', 'Sleeping Bag/Pillow', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Dress Code Agreement', 'General Media Release Consent', 'Medical Consent and Liability Release Consent', 'Signature by Participant/Authorized Signatory'],
     ['Young Adult Spiritual Convocation (YASC)', 'First Name', 'Last Name', 'Email', 'Minor\'s Email (at least 13 years of age)', 'Phone', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Are you in: College/Working', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'I will be staying at the hosting church.', 'Dress Code Agreement', 'Name of Parent/Guardian (if Participant is under 18)'],
     ['College Youth Spiritual Convocation (CYSC)', 'First Name', 'Last Name', 'Email', 'Minor\'s Email (at least 13 years of age)', 'Phone', 'Gender', 'Local Church', 'I am a baptized member of the True Jesus Church', 'I have received the Holy Spirit', 'Emergency Contact Person', 'Emergency Contact Relationship', 'Emergency Contact Phone', 'Participant can help with the following', 'Arrival Details', 'Arrival Date', 'Arrival Time', 'Departing City/Airport', 'Arrival City/Airport', 'Arrival Airline', 'Arrival Flight Number', 'Arrival Train/Bus Station', 'Arrival Carrier', 'Arrival Train/Bus Number', 'Departure Details', 'Departure Date', 'Departure Time', 'Departure City/Airport', 'Destination City/Airport', 'Departure Airline', 'Departure Flight Number', 'Departure Train/Bus Station', 'Departure Carrier', 'Departure Train/Bus Number', 'I need lodging before the event', 'Sleep Preferences & Habits (select all that apply)', 'Food/Medicine Restrictions', 'Other Special Needs/Accommodations (e.g., mobility assistance)', 'I need lodging after the event', 'Dress Code Agreement', 'Name of Parent/Guardian (if Participant is under 18)']
@@ -3337,6 +3484,10 @@ function translateText(text, targetLanguages) {
       'My current age group': '我的年齡組別',
       'Age Group': '年齡組別',
       'What fellowship': '所屬團契',
+      'Lodging Arrangement 住宿安排': 'Lodging Arrangement 住宿安排',
+      'Lodging Arrangement': '住宿安排',
+      'Lodging at host church / 主辦教會安排住宿': 'Lodging at host church / 主辦教會安排住宿',
+      'Self-arranged lodging & transit / 自行安排住行': 'Self-arranged lodging & transit / 自行安排住行',
       'I will be staying at the hosting church.': '我將住在主辦教會。',
       'I need lodging before the event': '活動前需要住宿',
       'I need lodging after the event': '活動後需要住宿',
@@ -3815,7 +3966,36 @@ function upgradeExistingSheet() {
   const confirm = ui.alert('Confirm Upgrade', `Found spreadsheet: "${ss.getName()}".\n\nThis will backup the old Logistics/Pickup/Drop-Off sheets, generate a new Summary Dashboard, and fully resync all historical data. Continue?`, ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
   
-  // 1. Rename Old Sheets
+  // 1. Rename Old Sheets & Save Existing Logistics Manual Data (Room Assignment, Group/Team, Notes)
+  const savedLogisticsData = {};
+  const currentLogSheet = ss.getSheetByName('Logistics');
+  if (currentLogSheet) {
+    const oldValues = currentLogSheet.getDataRange().getValues();
+    if (oldValues.length > 1) {
+      const oldH = oldValues[0].map(h => String(h).trim());
+      const oldEmailIdx = oldH.indexOf('Email');
+      const oldFirstIdx = oldH.indexOf('First Name');
+      const oldLastIdx = oldH.indexOf('Last Name');
+      const oldRoomIdx = oldH.indexOf('Room Assignment');
+      const oldGroupIdx = oldH.indexOf('Group/Team');
+      const oldNotesIdx = oldH.indexOf('Notes');
+      
+      for (let r = 1; r < oldValues.length; r++) {
+        const row = oldValues[r];
+        const email = oldEmailIdx !== -1 ? String(row[oldEmailIdx] || '').trim().toLowerCase() : '';
+        const nameKey = (oldFirstIdx !== -1 && oldLastIdx !== -1) ? 
+          `${String(row[oldFirstIdx] || '').trim().toLowerCase()}_${String(row[oldLastIdx] || '').trim().toLowerCase()}` : '';
+        const entry = {
+          room: oldRoomIdx !== -1 ? row[oldRoomIdx] : '',
+          group: oldGroupIdx !== -1 ? row[oldGroupIdx] : '',
+          notes: oldNotesIdx !== -1 ? row[oldNotesIdx] : ''
+        };
+        if (email) savedLogisticsData[email] = entry;
+        if (nameKey) savedLogisticsData[nameKey] = entry;
+      }
+    }
+  }
+
   const oldNames = ['Logistics', 'Pickup', 'Drop-Off', 'Summary Dashboard', 'Airport Summary'];
   oldNames.forEach(name => {
     const s = ss.getSheetByName(name);
@@ -3876,7 +4056,7 @@ function upgradeExistingSheet() {
         }
         if (hLower.includes("first name")) { if (val) firstName = val; }
         else if (hLower.includes("last name")) lastName = val;
-        else if (hLower.includes("phone") && !hLower.includes("emergency")) phone = val;
+        else if (hLower.includes("phone") && !hLower.includes("emergency")) phone = formatSheetTextValue(val, true);
         else if (hLower.includes("arrival details") || hLower.includes("arrival arrangements") || hLower.includes("arriving by")) arrDetails = val;
         else if (hLower.includes("arrival date")) arrDate = val;
         else if (hLower.includes("arrival time")) arrTime = val;
@@ -3936,7 +4116,7 @@ function upgradeExistingSheet() {
                    else if (logHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
                    else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
                    else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
-                   else if (logHeader === "Staying at Host Church?" && (hLower.includes("staying at the hosting church") || hLower.includes("lodging arrangement") || hLower.includes("住宿安排"))) mappedValue = val;
+                   else if (logHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
                    else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
                    else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
                    else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
@@ -3944,13 +4124,17 @@ function upgradeExistingSheet() {
                    else if (logHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
                    else if (logHeader === "Emergency Contact Person" && hLower.includes("emergency contact person")) mappedValue = val;
                    else if (logHeader === "Emergency Contact Relationship" && hLower.includes("emergency contact relationship")) mappedValue = val;
-                   else if (logHeader === "Emergency Contact Phone" && hLower.includes("emergency contact phone") && !hLower.includes("evening")) mappedValue = val;
+                   else if (logHeader === "Emergency Contact Phone" && hLower.includes("emergency contact phone") && !hLower.includes("evening")) mappedValue = formatSheetTextValue(val, true);
                }
            }
-           newLogRowData.push(mappedValue);
+           const isPhoneCol = (logHeader === "Phone" || logHeader === "Emergency Contact Phone");
+           newLogRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
       }
-      const blankPadding = new Array(logHeaders.length - autoColCount).fill("");
-      logisticsSheet.appendRow([...newLogRowData, ...blankPadding]);
+      const keyEmail = emailRecipient.toLowerCase().trim();
+      const keyName = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
+      const saved = savedLogisticsData[keyEmail] || savedLogisticsData[keyName] || { room: "", group: "", notes: "" };
+      const manualData = [saved.room || "", saved.group || "", saved.notes || ""];
+      logisticsSheet.appendRow([...newLogRowData, ...manualData]);
   };
   
   if (responseData.length > 1) {
@@ -3976,6 +4160,253 @@ function upgradeExistingSheet() {
   setupAirportSummarySheet(ss, hasAirport);
 
   ui.alert('Success', 'Spreadsheet successfully upgraded to the new V2 format!', ui.ButtonSet.OK);
+}
+
+/**
+ * Safely adds and synchronizes the "Staying at Host Church?" column in the Logistics tab
+ * of an existing event response spreadsheet without overwriting room assignments or notes,
+ * and repairs any international phone number #ERROR! formula parse errors across tabs.
+ */
+function syncLogisticsStayingAtChurchMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const prompt = ui.prompt(
+    'Sync Logistics "Staying at Church" Column',
+    'Enter the Google Sheet URL of the event response spreadsheet to update:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (prompt.getSelectedButton() !== ui.Button.OK) return;
+  const url = prompt.getResponseText().trim();
+  if (!url) return;
+  
+  let targetSs;
+  try {
+    targetSs = SpreadsheetApp.openByUrl(url);
+  } catch (err) {
+    ui.alert('Error', 'Could not open spreadsheet. Please check the URL and permissions: ' + err.message, ui.ButtonSet.OK);
+    return;
+  }
+  
+  const result = syncLogisticsStayingAtChurchColumn(targetSs);
+  if (result.success) {
+    ui.alert('Success', result.message, ui.ButtonSet.OK);
+  } else {
+    ui.alert('Notice', result.message, ui.ButtonSet.OK);
+  }
+}
+
+function syncLogisticsStayingAtChurchColumn(targetSs) {
+  const responsesSheet = targetSs.getSheetByName("Form Responses 1");
+  if (!responsesSheet) {
+    return { success: false, message: 'Could not find "Form Responses 1" tab in this spreadsheet.' };
+  }
+  
+  const respData = responsesSheet.getDataRange().getDisplayValues();
+  if (respData.length < 1) {
+    return { success: false, message: 'The "Form Responses 1" sheet contains no data.' };
+  }
+  
+  const respHeaders = respData[0].map(h => String(h).trim());
+  
+  // Find staying at church / lodging column
+  let lodgingColIdx = -1;
+  let matchedRespHeader = "";
+  for (let c = 0; c < respHeaders.length; c++) {
+    if (isStayingAtChurchField(respHeaders[c])) {
+      lodgingColIdx = c;
+      matchedRespHeader = respHeaders[c];
+      break;
+    }
+  }
+  
+  // Build lookup map from Form Responses 1 (including Phone and Emergency Contact Phone for #ERROR! repair)
+  let emailColIdx = respHeaders.findIndex(h => h.toLowerCase().includes("email") && !h.toLowerCase().includes("minor"));
+  if (emailColIdx === -1) emailColIdx = respHeaders.indexOf("Email Address");
+  const firstColIdx = respHeaders.findIndex(h => h.toLowerCase().includes("first name"));
+  const lastColIdx = respHeaders.findIndex(h => h.toLowerCase().includes("last name"));
+  const phoneColIdx = respHeaders.findIndex(h => h.toLowerCase().includes("phone") && !h.toLowerCase().includes("emergency"));
+  const emgPhoneColIdx = respHeaders.findIndex(h => h.toLowerCase().includes("emergency contact phone") && !h.toLowerCase().includes("evening"));
+  
+  const lodgingLookup = {};
+  const phoneLookup = {};
+  const emgPhoneLookup = {};
+  for (let r = 1; r < respData.length; r++) {
+    const row = respData[r];
+    const val = lodgingColIdx !== -1 ? String(row[lodgingColIdx] || "").trim() : "";
+    const phoneVal = phoneColIdx !== -1 ? String(row[phoneColIdx] || "").trim() : "";
+    const emgPhoneVal = emgPhoneColIdx !== -1 ? String(row[emgPhoneColIdx] || "").trim() : "";
+    
+    const emailKey = (emailColIdx !== -1 && row[emailColIdx]) ? String(row[emailColIdx]).trim().toLowerCase() : "";
+    const nameKey = (firstColIdx !== -1 && lastColIdx !== -1 && (row[firstColIdx] || row[lastColIdx])) ?
+      `${String(row[firstColIdx] || "").trim().toLowerCase()}_${String(row[lastColIdx] || "").trim().toLowerCase()}` : "";
+
+    if (val) {
+      if (emailKey) lodgingLookup[emailKey] = val;
+      if (nameKey) lodgingLookup[nameKey] = val;
+    }
+    if (phoneVal) {
+      if (emailKey) phoneLookup[emailKey] = phoneVal;
+      if (nameKey) phoneLookup[nameKey] = phoneVal;
+    }
+    if (emgPhoneVal) {
+      if (emailKey) emgPhoneLookup[emailKey] = emgPhoneVal;
+      if (nameKey) emgPhoneLookup[nameKey] = emgPhoneVal;
+    }
+  }
+
+  // Always repair Phone Number column in Pickup and Drop-Off sheets if present
+  ["Pickup", "Drop-Off"].forEach(tName => {
+    const tSheet = targetSs.getSheetByName(tName);
+    if (tSheet && tSheet.getLastRow() > 1) {
+      const tData = tSheet.getDataRange().getValues();
+      const tPhoneUpdate = [];
+      for (let r = 1; r < tData.length; r++) {
+        const tEmail = String(tData[r][2] || "").trim().toLowerCase();
+        const tNameKey = `${String(tData[r][0] || "").trim().toLowerCase()}_${String(tData[r][1] || "").trim().toLowerCase()}`;
+        const cleanPhone = phoneLookup[tEmail] || phoneLookup[tNameKey] || String(tData[r][3] || "");
+        tPhoneUpdate.push([formatSheetTextValue(cleanPhone, true)]);
+      }
+      if (tPhoneUpdate.length > 0) {
+        tSheet.getRange(2, 4, tSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+        tSheet.getRange(2, 4, tPhoneUpdate.length, 1).setValues(tPhoneUpdate);
+      }
+    }
+  });
+  
+  // Get or initialize Logistics sheet
+  let logisticsSheet = targetSs.getSheetByName("Logistics");
+  if (!logisticsSheet) {
+    logisticsSheet = setupLogisticsSheet(targetSs, respHeaders);
+    return { 
+      success: true, 
+      message: `Created a new "Logistics" sheet with Plain Text phone formatting.` 
+    };
+  }
+  
+  const logData = logisticsSheet.getDataRange().getValues();
+  let logHeaders = logData[0].map(h => String(h).trim());
+
+  // Always repair Phone & Emergency Contact Phone in Logistics even if no Staying at Church question exists
+  const logEmailIdx = logHeaders.indexOf("Email");
+  const logFirstIdx = logHeaders.indexOf("First Name");
+  const logLastIdx = logHeaders.indexOf("Last Name");
+  const logPhoneIdx = logHeaders.indexOf("Phone");
+  const logEmgPhoneIdx = logHeaders.indexOf("Emergency Contact Phone");
+
+  if (logData.length > 1) {
+    const phoneColToUpdate = [];
+    const emgPhoneColToUpdate = [];
+    for (let r = 1; r < logData.length; r++) {
+      const row = logData[r];
+      const email = logEmailIdx !== -1 ? String(row[logEmailIdx] || "").trim().toLowerCase() : "";
+      const nameKey = (logFirstIdx !== -1 && logLastIdx !== -1) ? 
+        `${String(row[logFirstIdx] || "").trim().toLowerCase()}_${String(row[logLastIdx] || "").trim().toLowerCase()}` : "";
+      if (logPhoneIdx !== -1) {
+        const cleanPhone = phoneLookup[email] || phoneLookup[nameKey] || String(row[logPhoneIdx] || "");
+        phoneColToUpdate.push([formatSheetTextValue(cleanPhone, true)]);
+      }
+      if (logEmgPhoneIdx !== -1) {
+        const cleanEmgPhone = emgPhoneLookup[email] || emgPhoneLookup[nameKey] || String(row[logEmgPhoneIdx] || "");
+        emgPhoneColToUpdate.push([formatSheetTextValue(cleanEmgPhone, true)]);
+      }
+    }
+    if (logPhoneIdx !== -1 && phoneColToUpdate.length > 0) {
+      logisticsSheet.getRange(2, logPhoneIdx + 1, logisticsSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+      logisticsSheet.getRange(2, logPhoneIdx + 1, phoneColToUpdate.length, 1).setValues(phoneColToUpdate);
+    }
+    if (logEmgPhoneIdx !== -1 && emgPhoneColToUpdate.length > 0) {
+      logisticsSheet.getRange(2, logEmgPhoneIdx + 1, logisticsSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+      logisticsSheet.getRange(2, logEmgPhoneIdx + 1, emgPhoneColToUpdate.length, 1).setValues(emgPhoneColToUpdate);
+    }
+  }
+
+  if (lodgingColIdx === -1) {
+    return { 
+      success: true, 
+      message: 'Synchronized and repaired all Phone / Emergency Contact Phone numbers across Logistics, Pickup, and Drop-Off tabs as Plain Text.\n\n(Note: No "Staying at church" question was found in "Form Responses 1", so no church-stay column was added.)' 
+    };
+  }
+
+  let targetColIdx = logHeaders.indexOf("Staying at Host Church?");
+  
+  if (targetColIdx === -1) {
+    // Determine insertion position (before "Lodging Before", or before "Room Assignment", or at autoColCount)
+    let insertBeforeCol = logHeaders.indexOf("Lodging Before");
+    if (insertBeforeCol === -1) insertBeforeCol = logHeaders.indexOf("Room Assignment");
+    if (insertBeforeCol === -1) insertBeforeCol = logHeaders.length; // fallback
+    
+    // insertColumnBefore is 1-indexed
+    logisticsSheet.insertColumnBefore(insertBeforeCol + 1);
+    targetColIdx = insertBeforeCol;
+    
+    // Set header
+    const headerCell = logisticsSheet.getRange(1, targetColIdx + 1);
+    headerCell.setValue("Staying at Host Church?")
+              .setFontWeight("bold")
+              .setBackground("#4a86e8")
+              .setFontColor("white");
+    logisticsSheet.setColumnWidth(targetColIdx + 1, 200);
+    
+    // Refresh logHeaders
+    logHeaders = logisticsSheet.getRange(1, 1, 1, logisticsSheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  }
+  
+  let updatedCount = 0;
+  if (logData.length > 1) {
+    const colToUpdate = [];
+    for (let r = 1; r < logData.length; r++) {
+      const row = logData[r];
+      const email = logEmailIdx !== -1 ? String(row[logEmailIdx] || "").trim().toLowerCase() : "";
+      const nameKey = (logFirstIdx !== -1 && logLastIdx !== -1) ? 
+        `${String(row[logFirstIdx] || "").trim().toLowerCase()}_${String(row[logLastIdx] || "").trim().toLowerCase()}` : "";
+      
+      const val = lodgingLookup[email] || lodgingLookup[nameKey] || "";
+      colToUpdate.push([val]);
+      if (val) updatedCount++;
+    }
+    
+    if (colToUpdate.length > 0) {
+      logisticsSheet.getRange(2, targetColIdx + 1, colToUpdate.length, 1).setValues(colToUpdate);
+    }
+  }
+  
+  // Apply conditional formatting
+  if (logisticsSheet.getMaxRows() > 1) {
+    const topCellA1 = logisticsSheet.getRange(2, targetColIdx + 1).getA1Notation();
+    const stayingRange = logisticsSheet.getRange(2, targetColIdx + 1, logisticsSheet.getMaxRows() - 1, 1);
+    
+    const yesRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=REGEXMATCH(TO_TEXT(${topCellA1}), "(?i)yes|host church|主辦教會")`)
+      .setBackground("#e6f4ea")
+      .setFontColor("#137333")
+      .setRanges([stayingRange])
+      .build();
+      
+    const noRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=REGEXMATCH(TO_TEXT(${topCellA1}), "(?i)no|self|自行安排")`)
+      .setBackground("#f1f3f4")
+      .setFontColor("#5f6368")
+      .setRanges([stayingRange])
+      .build();
+      
+    const existingRules = logisticsSheet.getConditionalFormatRules() || [];
+    existingRules.push(yesRule, noRule);
+    logisticsSheet.setConditionalFormatRules(existingRules);
+  }
+  
+  // Re-apply filter
+  try {
+    if (logisticsSheet.getFilter()) {
+      logisticsSheet.getFilter().remove();
+    }
+    logisticsSheet.getRange(1, 1, Math.max(logisticsSheet.getLastRow(), 2), logisticsSheet.getLastColumn()).createFilter();
+  } catch(e) {
+    Logger.log("Notice reapplying filter: " + e.message);
+  }
+  
+  return {
+    success: true,
+    message: `Successfully synchronized "Staying at Host Church?" into the Logistics sheet for ${updatedCount} participant records!\n\nQuestion matched: "${matchedRespHeader}"\nExisting room assignments, groups, and notes were preserved.`
+  };
 }
 
 // =======================================================================
