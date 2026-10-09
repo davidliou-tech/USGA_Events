@@ -20,6 +20,8 @@ function onOpen() {
       .addSubMenu(ui.createMenu('Advanced Maintenance')
           .addItem('Sync Active Events from System Log', 'syncActiveEventsFromSystemLogMenu')
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
+          .addItem('Setup / Sync Lodging & Room Inventory Tabs', 'syncLodgingAndRoomsMenu')
+          .addItem('Import Host Church Rooms into Event Sheet', 'importHostChurchRoomsMenu')
           .addItem('Sync Logistics "Staying at Church" Column', 'syncLogisticsStayingAtChurchMenu')
           .addItem('Clean Up Dead Triggers', 'cleanupDeadTriggers')
           .addItem('Delete ALL Triggers (Reset)', 'deleteAllTriggers')
@@ -579,6 +581,16 @@ function setupTransportationSheets(ss) {
   return { pickupSheet: pickupSheet, dropoffSheet: dropoffSheet };
 }
 
+function columnToLetter(column) {
+  let temp, letter = '';
+  while (column > 0) {
+    temp = (column - 1) % 26;
+    letter = String.fromCharCode(temp + 65) + letter;
+    column = (column - temp - 1) / 26;
+  }
+  return letter;
+}
+
 function isStayingAtChurchField(fieldName) {
   if (!fieldName) return false;
   const lower = String(fieldName).toLowerCase().trim();
@@ -593,6 +605,27 @@ function isStayingAtChurchField(fieldName) {
          lower.includes("住在教會") ||
          lower.includes("church lodging") ||
          lower.includes("host church lodging");
+}
+
+function isStayingAtChurchResponse(val) {
+  if (val === null || val === undefined) return false;
+  const str = String(val).trim();
+  if (!str) return false;
+  const lower = str.toLowerCase();
+  if (/^(no|n|false)\b/.test(lower) || lower.includes("self") || lower.includes("自行安排") || lower.includes("not staying")) {
+    return false;
+  }
+  return /^(yes|y|true)\b/.test(lower) ||
+         lower.includes("host church") ||
+         lower.includes("hosting church") ||
+         lower.includes("church") ||
+         lower.includes("主辦教會") ||
+         lower.includes("住在教會") ||
+         lower.includes("住在主辦教會");
+}
+
+function getBuildingLookupFormula() {
+  return `=IF(INDIRECT("RC[-1]", FALSE)="", "", IFERROR(VLOOKUP(INDIRECT("RC[-1]", FALSE), {'Room Inventory'!$F$2:$F, 'Room Inventory'!$A$2:$A}, 2, FALSE), ""))`;
 }
 
 function setupLogisticsSheet(ss, selectedFieldNames) {
@@ -617,10 +650,7 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
     "Lodging Arrangement": "Staying at Host Church?",
     "Lodging Arrangement 住宿安排": "Staying at Host Church?",
     "住宿安排": "Staying at Host Church?",
-    "I need lodging before the event": "Lodging Before",
-    "I need lodging after the event": "Lodging After",
     "Food/Medicine Restrictions": "Food/Medicine Restrictions",
-    "Sleep Preferences & Habits (select all that apply)": "Sleep Preferences & Habits",
     "Other Special Needs/Accommodations (e.g., mobility assistance)": "Other Special Needs",
     "Emergency Contact Person": "Emergency Contact Person",
     "Emergency Contact Relationship": "Emergency Contact Relationship",
@@ -648,12 +678,6 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
       logHeaders.push("Staying at Host Church?");
   }
 
-  if (names.some(n => n === "I need lodging before the event") && !logHeaders.includes("Lodging Before")) {
-      logHeaders.push("Lodging Before");
-  }
-  if (names.some(n => n === "I need lodging after the event") && !logHeaders.includes("Lodging After")) {
-      logHeaders.push("Lodging After");
-  }
   if (names.some(n => n === "Food/Medicine Restrictions") && !logHeaders.includes("Food/Medicine Restrictions")) {
       logHeaders.push("Food/Medicine Restrictions");
   }
@@ -661,13 +685,13 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
       logHeaders.push("Other Special Needs");
   }
 
-  logHeaders.push("Room Assignment", "Group/Team", "Notes");
+  logHeaders.push("Group/Team", "Notes");
 
   logisticsSheet.appendRow(logHeaders);
   
-  const autoColCount = logHeaders.length - 3;
+  const autoColCount = logHeaders.length - 2;
   logisticsSheet.getRange(1, 1, 1, autoColCount).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
-  logisticsSheet.getRange(1, autoColCount + 1, 1, 3).setFontWeight("bold").setBackground("#ffd966").setFontColor("black");
+  logisticsSheet.getRange(1, autoColCount + 1, 1, 2).setFontWeight("bold").setBackground("#ffd966").setFontColor("black");
   
   logisticsSheet.setFrozenRows(1);
   logisticsSheet.setColumnWidth(1, 150);
@@ -720,6 +744,265 @@ function setupLogisticsSheet(ss, selectedFieldNames) {
   return logisticsSheet;
 }
 
+/**
+ * Sets up the dedicated Lodging sheet filtered to participants staying at the host church,
+ * with room assignment dropdowns linked to the Room Inventory tab.
+ */
+function setupLodgingSheet(ss, selectedFieldNames) {
+  let lodgingSheet = ss.getSheetByName("Lodging");
+  if (!lodgingSheet) {
+    lodgingSheet = ss.insertSheet("Lodging");
+  } else {
+    lodgingSheet.clear();
+  }
+
+  const names = selectedFieldNames || [];
+  let lodgHeaders = ["First Name", "Last Name", "Email", "Phone"];
+
+  if (names.some(n => n.includes("Gender"))) lodgHeaders.push("Gender");
+  if (names.some(n => n === "Age" || (n.startsWith("Age") && !n.includes("group")))) lodgHeaders.push("Age");
+  if (names.some(n => n.includes("My current age group") || n.toLowerCase().includes("age group"))) lodgHeaders.push("Age Group");
+  if (names.some(n => n.startsWith("Grade"))) lodgHeaders.push("Grade");
+  if (names.some(n => n.includes("Name of Parent/Guardian") || (n.toLowerCase().includes("parent/guardian") && !n.toLowerCase().includes("signature")))) lodgHeaders.push("Parent/Guardian");
+  if (names.some(n => n.includes("Local Church") || n.includes("What fellowship"))) lodgHeaders.push("Local Church/Place of Worship");
+  if (names.some(isStayingAtChurchField)) lodgHeaders.push("Staying at Host Church?");
+  if (names.some(n => n.toLowerCase().includes("lodging before"))) lodgHeaders.push("Lodging Before");
+  if (names.some(n => n.toLowerCase().includes("lodging after"))) lodgHeaders.push("Lodging After");
+  if (names.some(n => n.toLowerCase().includes("exact dates of arrival/departure for lodging") || n.toLowerCase().includes("exact lodging dates"))) lodgHeaders.push("Exact Lodging Dates");
+  if (names.some(n => n.toLowerCase().includes("sleeping bag") || n.toLowerCase().includes("pillow"))) lodgHeaders.push("Sleeping Bag/Pillow");
+  if (names.some(n => n.toLowerCase().includes("sleep preferences"))) lodgHeaders.push("Sleep Preferences & Habits");
+  if (names.some(n => n.toLowerCase().includes("other special needs"))) lodgHeaders.push("Other Special Needs");
+
+  lodgHeaders.push("Status");
+
+  const manualHeaders = ["Room Assignment", "Building", "Bed / Spot", "Lodging Notes"];
+  const allHeaders = [...lodgHeaders, ...manualHeaders];
+
+  lodgingSheet.appendRow(allHeaders);
+
+  const autoColCount = lodgHeaders.length;
+  lodgingSheet.getRange(1, 1, 1, autoColCount).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
+  lodgingSheet.getRange(1, autoColCount + 1, 1, manualHeaders.length).setFontWeight("bold").setBackground("#ffd966").setFontColor("black");
+
+  // Add helpful hover notes on the yellow Host Church rooming columns in Lodging
+  const lodgingManualNotes = [[
+    "[Host Church Input]\nClick the dropdown arrow to select a room from your 'Room Inventory' tab (or type a custom room name).\n\nSelecting a room here automatically:\n• Fills in the Building column\n• Updates the room's Assigned Count & Remaining Capacity on 'Room Inventory'\n• Adds this participant's name to the room's Live Roster",
+    "[Auto-Filled / Editable]\nAutomatically displays the Building Name from 'Room Inventory' once a Room Assignment is selected.\n\n(You may also type directly into this column if assigning off-site or custom lodging.)",
+    "[Host Church Input - Optional]\nEnter a specific bed number, bunk (Top/Bottom), cot, or floor mattress spot if your team tracks individual beds within a room.",
+    "[Host Church Input - Optional]\nEnter any lodging-specific notes for this participant (e.g., 'Arriving late Friday night', 'Needs extra blanket', 'Rooming with family')."
+  ]];
+  lodgingSheet.getRange(1, autoColCount + 1, 1, manualHeaders.length).setNotes(lodgingManualNotes);
+
+  lodgingSheet.setFrozenRows(1);
+  lodgingSheet.setColumnWidth(1, 140);
+  lodgingSheet.setColumnWidth(2, 140);
+  for (let i = 3; i <= allHeaders.length; i++) {
+    const h = allHeaders[i - 1];
+    if (h === "Gender" || h === "Age" || h === "Grade" || h === "Age Group" || h === "Status") {
+      lodgingSheet.setColumnWidth(i, 110);
+    } else if (h === "Room Assignment" || h === "Sleep Preferences & Habits" || h === "Email") {
+      lodgingSheet.setColumnWidth(i, 210);
+    } else {
+      lodgingSheet.setColumnWidth(i, 165);
+    }
+  }
+
+  if (lodgingSheet.getMaxRows() > 1) {
+    const phoneColIdx = allHeaders.indexOf("Phone") + 1;
+    if (phoneColIdx > 0) {
+      lodgingSheet.getRange(2, phoneColIdx, lodgingSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    }
+  }
+
+  // Conditional formatting for Staying at Host Church?
+  const stayingColIdx = allHeaders.indexOf("Staying at Host Church?") + 1;
+  if (stayingColIdx > 0 && lodgingSheet.getMaxRows() > 1) {
+    const topCellA1 = lodgingSheet.getRange(2, stayingColIdx).getA1Notation();
+    const stayingRange = lodgingSheet.getRange(2, stayingColIdx, lodgingSheet.getMaxRows() - 1, 1);
+
+    const yesRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=REGEXMATCH(TO_TEXT(${topCellA1}), "(?i)yes|host church|主辦教會")`)
+      .setBackground("#e6f4ea")
+      .setFontColor("#137333")
+      .setRanges([stayingRange])
+      .build();
+
+    const noRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=REGEXMATCH(TO_TEXT(${topCellA1}), "(?i)no|self|自行安排")`)
+      .setBackground("#f1f3f4")
+      .setFontColor("#5f6368")
+      .setRanges([stayingRange])
+      .build();
+
+    const existingRules = lodgingSheet.getConditionalFormatRules() || [];
+    existingRules.push(yesRule, noRule);
+    lodgingSheet.setConditionalFormatRules(existingRules);
+  }
+
+  if (!lodgingSheet.getFilter()) {
+    lodgingSheet.getRange(1, 1, lodgingSheet.getMaxRows(), allHeaders.length).createFilter();
+  }
+
+  return lodgingSheet;
+}
+
+/**
+ * Sets up or refreshes the Room Inventory sheet so host churches can paste or import
+ * their buildings, rooms, gender designations, and capacities, with live capacity & occupant tracking.
+ */
+function setupRoomInventorySheet(ss, lodgingSheet, preserveExistingRooms) {
+  let roomSheet = ss.getSheetByName("Room Inventory");
+  let existingRooms = [];
+
+  if (roomSheet && preserveExistingRooms) {
+    const data = roomSheet.getDataRange().getValues();
+    for (let r = 1; r < data.length; r++) {
+      const bldg = String(data[r][0] || "").trim();
+      const rm = String(data[r][1] || "").trim();
+      const gen = String(data[r][2] || "").trim();
+      const cap = data[r][3] !== "" && data[r][3] !== null ? data[r][3] : "";
+      const notes = String(data[r][4] || "").trim();
+      if (bldg || rm || gen || cap !== "" || notes) {
+        existingRooms.push([bldg, rm, gen, cap, notes]);
+      }
+    }
+  }
+
+  if (!roomSheet) {
+    roomSheet = ss.insertSheet("Room Inventory");
+  } else {
+    roomSheet.clear();
+  }
+
+  const headers = [
+    "Building Name",
+    "Room Name / #",
+    "Gender / Designation",
+    "Max Capacity",
+    "Room Features / Notes",
+    "Room Assignment Key",
+    "Assigned Count",
+    "Remaining Capacity",
+    "Assigned Occupants (Live Roster)"
+  ];
+
+  roomSheet.appendRow(headers);
+
+  // Style Host Church Input columns (A-E) in Forest Green and Automated Tracking columns (F-I) in Blue
+  roomSheet.getRange(1, 1, 1, 5).setFontWeight("bold").setBackground("#137333").setFontColor("white");
+  roomSheet.getRange(1, 6, 1, 4).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
+  roomSheet.setFrozenRows(1);
+
+  // Add clear, beginner-friendly hover notes (comment boxes) on all headers (Columns A-I)
+  const roomHeaderNotes = [[
+    "[Host Church Input - Column A]\nEnter the name of the building, wing, or facility where this room is located.\n\nExamples:\n• Main Church\n• Education Building\n• Fellowship Hall\n• Hotel / Off-site\n\nTip: If your church only has a single building, you can leave this blank or enter 'Main Church'.",
+    "[Host Church Input - Column B (Required)]\nEnter the room name, room number, or sleeping area identifier.\n\nExamples:\n• Room 101\n• Classroom 2B\n• Brothers Dorm A\n• Nursery / Cry Room\n\nOnce entered, this room will automatically appear in the 'Room Assignment' dropdown on the Lodging tab!",
+    "[Host Church Input - Column C]\nClick the dropdown arrow to choose who this room is designated for:\n\n• Male / Brothers (Men & boys)\n• Female / Sisters (Women & girls)\n• Family / Couples (Families or married couples)\n• Counselors / Staff (Ministers, teachers, or event staff)\n• Flexible / Any (Can be assigned as needed)",
+    "[Host Church Input - Column D (Numbers Only)]\nEnter the maximum number of people who can sleep in this room (e.g., 4, 6, 10).\n\nInclude all beds, bunks, cots, and floor mattress spots.\n\nTip: Columns G & H will automatically count how many people you assign to this room and warn you if the room goes over capacity!",
+    "[Host Church Input - Column E (Optional)]\nAdd any helpful details about this room for your lodging team.\n\nExamples:\n• 1st Floor (good for seniors / mobility needs)\n• Has private bathroom\n• 2 bunk beds + 2 floor mattresses\n• Quiet area (good for light sleepers)",
+    "[Automated Formula - Do Not Edit]\nAutomatically combines Building Name + Room Name (for example: 'Main Church - Room 101').\n\nThis column powers the Room Assignment dropdown menu on the 'Lodging' sheet.",
+    "[Automated Formula - Do Not Edit]\nAutomatically counts how many active participants are assigned to this room on the 'Lodging' sheet.",
+    "[Automated Formula - Do Not Edit]\nAutomatically calculates how many open spots are left in this room (Max Capacity minus Assigned Count):\n\n• Green = Open spots available\n• Yellow = Room is full (0 spots left)\n• Red = Over capacity! (More people assigned than Max Capacity)",
+    "[Automated Formula - Do Not Edit]\nAutomatically lists the full names of everyone currently assigned to this room on the 'Lodging' sheet."
+  ]];
+  roomSheet.getRange(1, 1, 1, headers.length).setNotes(roomHeaderNotes);
+
+  roomSheet.setColumnWidth(1, 160);
+  roomSheet.setColumnWidth(2, 150);
+  roomSheet.setColumnWidth(3, 150);
+  roomSheet.setColumnWidth(4, 115);
+  roomSheet.setColumnWidth(5, 220);
+  roomSheet.setColumnWidth(6, 210);
+  roomSheet.setColumnWidth(7, 120);
+  roomSheet.setColumnWidth(8, 140);
+  roomSheet.setColumnWidth(9, 340);
+
+  // Determine Lodging column letters for Room Assignment and Status
+  const targetLodgingSheet = lodgingSheet || ss.getSheetByName("Lodging");
+  let roomColLetter = "N";
+  let statusColLetter = "M";
+  if (targetLodgingSheet && targetLodgingSheet.getLastColumn() > 0) {
+    const lodgHeaders = targetLodgingSheet.getRange(1, 1, 1, targetLodgingSheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+    const rmIdx = lodgHeaders.indexOf("Room Assignment");
+    const stIdx = lodgHeaders.indexOf("Status");
+    if (rmIdx !== -1) roomColLetter = columnToLetter(rmIdx + 1);
+    if (stIdx !== -1) statusColLetter = columnToLetter(stIdx + 1);
+  }
+
+  const formulaRowsCount = Math.max(150, existingRooms.length + 50);
+  if (roomSheet.getMaxRows() < formulaRowsCount + 1) {
+    roomSheet.insertRowsAfter(roomSheet.getMaxRows(), (formulaRowsCount + 1) - roomSheet.getMaxRows());
+  }
+
+  // Restore existing room inputs if any
+  if (existingRooms.length > 0) {
+    roomSheet.getRange(2, 1, existingRooms.length, 5).setValues(existingRooms);
+  }
+
+  // Populate live tracking formulas in Columns F-I (rows 2..formulaRowsCount+1)
+  const formulas = [];
+  for (let r = 2; r <= formulaRowsCount + 1; r++) {
+    const keyFormula = `=IF(B${r}="", "", IF(A${r}="", B${r}, A${r} & " - " & B${r}))`;
+    const countFormula = `=IF(F${r}="", "", COUNTIFS(Lodging!$${roomColLetter}$2:$${roomColLetter}, F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>CANCELLED"))`;
+    const remFormula = `=IF(F${r}="", "", IF(D${r}="", "", D${r} - G${r}))`;
+    const rosterFormula = `=IF(F${r}="", "", IFERROR(TEXTJOIN(", ", TRUE, FILTER(Lodging!$A$2:$A & " " & Lodging!$B$2:$B, Lodging!$${roomColLetter}$2:$${roomColLetter} = F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter} <> "CANCELLED")), ""))`;
+    formulas.push([keyFormula, countFormula, remFormula, rosterFormula]);
+  }
+  roomSheet.getRange(2, 6, formulas.length, 4).setFormulas(formulas);
+  roomSheet.getRange(2, 4, formulas.length, 1).setHorizontalAlignment("center");
+  roomSheet.getRange(2, 7, formulas.length, 2).setHorizontalAlignment("center");
+
+  // Dropdown validation for Gender / Designation on Room Inventory (Column C)
+  const genderRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(["Male / Brothers", "Female / Sisters", "Family / Couples", "Counselors / Staff", "Flexible / Any"], true)
+    .setAllowInvalid(true)
+    .build();
+  roomSheet.getRange(2, 3, formulaRowsCount, 1).setDataValidation(genderRule);
+
+  // Conditional Formatting on Remaining Capacity (Column H): Green (>0), Yellow (=0), Red (<0)
+  const remRange = roomSheet.getRange(2, 8, formulaRowsCount, 1);
+  const openRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(`=AND(ISNUMBER(H2), H2>0)`)
+    .setBackground("#e6f4ea")
+    .setFontColor("#137333")
+    .setRanges([remRange])
+    .build();
+  const fullRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(`=AND(ISNUMBER(H2), H2=0)`)
+    .setBackground("#fef7e0")
+    .setFontColor("#b06000")
+    .setRanges([remRange])
+    .build();
+  const overRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(`=AND(ISNUMBER(H2), H2<0)`)
+    .setBackground("#fce8e6")
+    .setFontColor("#c5221f")
+    .setBold(true)
+    .setRanges([remRange])
+    .build();
+  roomSheet.setConditionalFormatRules([openRule, fullRule, overRule]);
+
+  if (!roomSheet.getFilter()) {
+    roomSheet.getRange(1, 1, formulaRowsCount + 1, headers.length).createFilter();
+  }
+
+  // Bind Room Assignment dropdown on Lodging sheet to Room Inventory Column F
+  if (targetLodgingSheet && targetLodgingSheet.getLastColumn() > 0) {
+    const lodgHeaders = targetLodgingSheet.getRange(1, 1, 1, targetLodgingSheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+    const rmIdx = lodgHeaders.indexOf("Room Assignment");
+    if (rmIdx !== -1 && targetLodgingSheet.getMaxRows() > 1) {
+      const keyRange = roomSheet.getRange(2, 6, formulaRowsCount, 1);
+      const roomDropdownRule = SpreadsheetApp.newDataValidation()
+        .requireValueInRange(keyRange, true)
+        .setAllowInvalid(true)
+        .build();
+      targetLodgingSheet.getRange(2, rmIdx + 1, targetLodgingSheet.getMaxRows() - 1, 1).setDataValidation(roomDropdownRule);
+    }
+  }
+
+  return roomSheet;
+}
+
 function setupSummaryDashboard(ss, selectedFieldNames) {
   let summarySheet = ss.getSheetByName("Summary Dashboard");
   if (!summarySheet) {
@@ -762,7 +1045,7 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
   sumData.push(["Does Not Need Drop-off", cTravelMatch("Departure", "need drop"), "", ""]);
   sumData.push(["", "", "", ""]);
 
-  sumData.push(["Lodging Needs", "", "", ""]);
+  sumData.push(["Lodging Needs & Room Capacity", "", "", ""]);
   const cLodgingMatch = (mode) => {
      const standardHeader = `IFERROR(MATCH("I will be staying*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*staying*church*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*我將住在主辦教會*", 'Form Responses 1'!1:1, 0), MATCH("*住在教會*", 'Form Responses 1'!1:1, 0))))`;
      const legacyHeader = `IFERROR(MATCH("Lodging Arrangement*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("Lodging*", 'Form Responses 1'!1:1, 0), MATCH("*住宿安排*", 'Form Responses 1'!1:1, 0)))`;
@@ -777,6 +1060,9 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
   sumData.push(["Not Staying at Hosting Church", cLodgingMatch("No"), "", ""]);
   sumData.push(["Lodging Before Event", cCountIfs("I need lodging before", "Yes*"), "", ""]);
   sumData.push(["Lodging After Event", cCountIfs("I need lodging after", "Yes*"), "", ""]);
+  sumData.push(["Total Room Capacity (Room Inventory)", `=IFERROR(SUM('Room Inventory'!D2:D), 0)`, "", ""]);
+  sumData.push(["Assigned to Rooms", `=IFERROR(SUM('Room Inventory'!G2:G), 0)`, "", ""]);
+  sumData.push(["Remaining Room Capacity", `=IFERROR(SUM('Room Inventory'!H2:H), 0)`, "", ""]);
   sumData.push(["", "", "", ""]);
 
   sumData.push(["Dietary & Medical", "", "", ""]);
@@ -1637,12 +1923,14 @@ function generateForm(payload) { try {
   participantsSheet.setColumnWidth(4, 200);
   
   // ----------------------------------------------------
-  // Add Transportation, Logistics, Dashboard, and Airport Sheets
+  // Add Transportation, Logistics, Lodging, Room Inventory, Dashboard, and Airport Sheets
   // ----------------------------------------------------
   setupTransportationSheets(responseSs);
   
   const selectedNames = payload.selectedFields.map(f => f.name);
   setupLogisticsSheet(responseSs, selectedNames);
+  const lodgingSheet = setupLodgingSheet(responseSs, selectedNames);
+  setupRoomInventorySheet(responseSs, lodgingSheet, false);
   setupSummaryDashboard(responseSs, selectedNames);
   
   const hasAirportFields = arrivalDetailsItem || departureSection || payload.selectedFields.some(f => f.name.includes('City/Airport'));
@@ -2588,6 +2876,8 @@ function masterRespondToRegistration(e) {
         let autoColCount = logHeaders.length;
         if (logHeaders.includes("Room Assignment")) {
            autoColCount = logHeaders.indexOf("Room Assignment");
+        } else if (logHeaders.includes("Group/Team")) {
+           autoColCount = logHeaders.indexOf("Group/Team");
         }
 
         for (let i = 0; i < autoColCount; i++) {
@@ -2611,6 +2901,8 @@ function masterRespondToRegistration(e) {
                    else if (logHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
                    else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
                    else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
+                   else if (logHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
+                   else if (logHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
                    else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
                    else if (logHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
                    else if (logHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
@@ -2636,8 +2928,135 @@ function masterRespondToRegistration(e) {
         }
       }
 
+      // ----------------------------------------------------
+      // Update Dedicated Lodging Sheet Logic
+      // ----------------------------------------------------
+      const lodgingSheet = responseSs.getSheetByName("Lodging");
+      if (lodgingSheet) {
+        const lodgData = lodgingSheet.getDataRange().getValues();
+        const lodgHeaders = lodgData[0].map(h => String(h).trim());
+
+        let foundLodgRowIndex = -1;
+        const lodgEmailIdx = lodgHeaders.indexOf("Email");
+        for (let i = 1; i < lodgData.length; i++) {
+          const rowEmail = (lodgEmailIdx !== -1) ? lodgData[i][lodgEmailIdx] : lodgData[i][2];
+          if (matchesParticipantRecord(lodgData[i][0], lodgData[i][1], rowEmail, firstName, lastName, emailRecipient)) {
+            foundLodgRowIndex = i + 1;
+            break;
+          }
+        }
+
+        let hasStayingField = false;
+        let stayingVal = "";
+        for (const respHeader in responses) {
+          if (isStayingAtChurchField(respHeader)) {
+            hasStayingField = true;
+            stayingVal = responses[respHeader][0] || "";
+            break;
+          }
+        }
+        const needsLodging = hasStayingField ? isStayingAtChurchResponse(stayingVal) : true;
+        const statusIdx = lodgHeaders.indexOf("Status");
+        let lodgAutoColCount = lodgHeaders.length;
+        if (lodgHeaders.includes("Room Assignment")) {
+          lodgAutoColCount = lodgHeaders.indexOf("Room Assignment");
+        }
+
+        if (needsLodging) {
+          const newLodgRowData = [];
+          for (let i = 0; i < lodgAutoColCount; i++) {
+            const lHeader = lodgHeaders[i];
+            if (lHeader === "Status") {
+              newLodgRowData.push("Active"); // Placeholder, refined below
+              continue;
+            }
+            let mappedValue = "";
+            if (lHeader === "First Name") mappedValue = firstName;
+            else if (lHeader === "Last Name") mappedValue = lastName;
+            else if (lHeader === "Email") mappedValue = emailRecipient;
+            else if (lHeader === "Phone") mappedValue = phone;
+            else {
+              for (const respHeader in responses) {
+                let hLower = respHeader.toLowerCase();
+                let val = responses[respHeader][0] || "";
+                if (lHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
+                else if (lHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
+                else if (lHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
+                else if (lHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
+                else if (lHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
+                else if (lHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
+                else if (lHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
+                else if (lHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
+                else if (lHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
+                else if (lHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
+                else if (lHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
+                else if (lHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
+                else if (lHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
+              }
+            }
+            const isPhoneCol = (lHeader === "Phone");
+            newLodgRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
+          }
+
+          let lodgStatus = "Active";
+          if (foundLodgRowIndex !== -1 && statusIdx !== -1) {
+            const oldRow = lodgData[foundLodgRowIndex - 1];
+            const watchHeaders = ["Lodging Before", "Lodging After", "Exact Lodging Dates", "Sleeping Bag/Pillow", "Sleep Preferences & Habits", "Other Special Needs"];
+            let changed = false;
+            for (const wh of watchHeaders) {
+              const idx = lodgHeaders.indexOf(wh);
+              if (idx !== -1 && idx < lodgAutoColCount) {
+                if (String(oldRow[idx] || "").trim() !== String(newLodgRowData[idx] || "").trim()) {
+                  changed = true;
+                  break;
+                }
+              }
+            }
+            if (oldRow[statusIdx] === "CANCELLED") {
+              lodgStatus = "Active";
+            } else if (changed) {
+              lodgStatus = "UPDATED";
+            } else {
+              lodgStatus = oldRow[statusIdx] || "Active";
+            }
+          }
+          if (statusIdx !== -1 && statusIdx < lodgAutoColCount) {
+            newLodgRowData[statusIdx] = lodgStatus;
+          }
+
+          if (foundLodgRowIndex !== -1) {
+            lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgAutoColCount).setValues([newLodgRowData]);
+            if (statusIdx !== -1 && (lodgData[foundLodgRowIndex - 1][statusIdx] === "CANCELLED" || lodgStatus === "UPDATED")) {
+              lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
+                          .setFontLine("none")
+                          .setBackground(lodgStatus === "UPDATED" ? "#fff2cc" : null)
+                          .setFontColor(lodgStatus === "UPDATED" ? "#b45f06" : null);
+            }
+          } else {
+            const manualColCount = lodgHeaders.length - lodgAutoColCount;
+            const manualPadding = new Array(manualColCount).fill("");
+            const bldgOffset = lodgHeaders.indexOf("Building") - lodgAutoColCount;
+            if (bldgOffset >= 0 && bldgOffset < manualPadding.length) {
+              manualPadding[bldgOffset] = getBuildingLookupFormula();
+            }
+            lodgingSheet.appendRow([...newLodgRowData, ...manualPadding]);
+          }
+        } else if (foundLodgRowIndex !== -1 && statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] !== "CANCELLED") {
+          lodgingSheet.getRange(foundLodgRowIndex, statusIdx + 1).setValue("CANCELLED");
+          lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
+                      .setFontLine("line-through")
+                      .setBackground("#f4cccc")
+                      .setFontColor("#666666");
+        }
+
+        if (lodgingSheet.getLastRow() > 1) {
+          lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn())
+                      .sort([{column: 2, ascending: true}]);
+        }
+      }
+
     } catch(err) {
-      Logger.log("Error processing transportation/logistics sync: " + err.message);
+      Logger.log("Error processing transportation/logistics/lodging sync: " + err.message);
     }
 
     let isWaitlisted = false;
@@ -3963,10 +4382,10 @@ function upgradeExistingSheet() {
     return;
   }
   
-  const confirm = ui.alert('Confirm Upgrade', `Found spreadsheet: "${ss.getName()}".\n\nThis will backup the old Logistics/Pickup/Drop-Off sheets, generate a new Summary Dashboard, and fully resync all historical data. Continue?`, ui.ButtonSet.YES_NO);
+  const confirm = ui.alert('Confirm Upgrade', `Found spreadsheet: "${ss.getName()}".\n\nThis will backup the old Logistics/Pickup/Drop-Off sheets, generate dedicated Lodging & Room Inventory tabs, create a new Summary Dashboard, and fully resync all historical data. Continue?`, ui.ButtonSet.YES_NO);
   if (confirm !== ui.Button.YES) return;
   
-  // 1. Rename Old Sheets & Save Existing Logistics Manual Data (Room Assignment, Group/Team, Notes)
+  // 1. Rename Old Sheets & Save Existing Manual Data from Logistics and Lodging
   const savedLogisticsData = {};
   const currentLogSheet = ss.getSheetByName('Logistics');
   if (currentLogSheet) {
@@ -3987,6 +4406,9 @@ function upgradeExistingSheet() {
           `${String(row[oldFirstIdx] || '').trim().toLowerCase()}_${String(row[oldLastIdx] || '').trim().toLowerCase()}` : '';
         const entry = {
           room: oldRoomIdx !== -1 ? row[oldRoomIdx] : '',
+          building: '',
+          bedSpot: '',
+          lodgingNotes: '',
           group: oldGroupIdx !== -1 ? row[oldGroupIdx] : '',
           notes: oldNotesIdx !== -1 ? row[oldNotesIdx] : ''
         };
@@ -3996,7 +4418,36 @@ function upgradeExistingSheet() {
     }
   }
 
-  const oldNames = ['Logistics', 'Pickup', 'Drop-Off', 'Summary Dashboard', 'Airport Summary'];
+  const currentLodgSheet = ss.getSheetByName('Lodging');
+  if (currentLodgSheet) {
+    const oldLodgValues = currentLodgSheet.getDataRange().getValues();
+    if (oldLodgValues.length > 1) {
+      const oldH = oldLodgValues[0].map(h => String(h).trim());
+      const oldEmailIdx = oldH.indexOf('Email');
+      const oldFirstIdx = oldH.indexOf('First Name');
+      const oldLastIdx = oldH.indexOf('Last Name');
+      const oldRoomIdx = oldH.indexOf('Room Assignment');
+      const oldBldgIdx = oldH.indexOf('Building');
+      const oldBedIdx = oldH.indexOf('Bed / Spot');
+      const oldLodgNotesIdx = oldH.indexOf('Lodging Notes');
+
+      for (let r = 1; r < oldLodgValues.length; r++) {
+        const row = oldLodgValues[r];
+        const email = oldEmailIdx !== -1 ? String(row[oldEmailIdx] || '').trim().toLowerCase() : '';
+        const nameKey = (oldFirstIdx !== -1 && oldLastIdx !== -1) ? 
+          `${String(row[oldFirstIdx] || '').trim().toLowerCase()}_${String(row[oldLastIdx] || '').trim().toLowerCase()}` : '';
+        const existing = (email && savedLogisticsData[email]) || (nameKey && savedLogisticsData[nameKey]) || { room: '', building: '', bedSpot: '', lodgingNotes: '', group: '', notes: '' };
+        if (oldRoomIdx !== -1 && row[oldRoomIdx]) existing.room = row[oldRoomIdx];
+        if (oldBldgIdx !== -1 && row[oldBldgIdx]) existing.building = row[oldBldgIdx];
+        if (oldBedIdx !== -1 && row[oldBedIdx]) existing.bedSpot = row[oldBedIdx];
+        if (oldLodgNotesIdx !== -1 && row[oldLodgNotesIdx]) existing.lodgingNotes = row[oldLodgNotesIdx];
+        if (email) savedLogisticsData[email] = existing;
+        if (nameKey) savedLogisticsData[nameKey] = existing;
+      }
+    }
+  }
+
+  const oldNames = ['Logistics', 'Lodging', 'Pickup', 'Drop-Off', 'Summary Dashboard', 'Airport Summary'];
   oldNames.forEach(name => {
     const s = ss.getSheetByName(name);
     if (s) {
@@ -4023,10 +4474,17 @@ function upgradeExistingSheet() {
   // 4. Create Pickup & Drop-Off Sheets
   const { pickupSheet, dropoffSheet } = setupTransportationSheets(ss);
 
-  // 5. Create Logistics Sheet
+  // 5. Create Streamlined Logistics Sheet
   const logisticsSheet = setupLogisticsSheet(ss, selectedNames);
   const logHeaders = logisticsSheet.getRange(1, 1, 1, logisticsSheet.getLastColumn()).getValues()[0];
-  const autoColCount = logHeaders.length - 3;
+  const autoColCount = logHeaders.indexOf("Group/Team") !== -1 ? logHeaders.indexOf("Group/Team") : (logHeaders.length - 2);
+
+  // 6. Create Dedicated Lodging & Room Inventory Sheets (preserving any existing Room Inventory rows)
+  const lodgingSheet = setupLodgingSheet(ss, selectedNames);
+  setupRoomInventorySheet(ss, lodgingSheet, true);
+  const lodgHeaders = lodgingSheet.getRange(1, 1, 1, lodgingSheet.getLastColumn()).getValues()[0];
+  const lodgAutoColCount = lodgHeaders.indexOf("Room Assignment") !== -1 ? lodgHeaders.indexOf("Room Assignment") : (lodgHeaders.length - 4);
+  const hasStayingQuestion = selectedNames.some(isStayingAtChurchField);
 
   // 7. Loop through all responses and run masterRespondToRegistration-style logic
   const responseData = responsesSheet.getDataRange().getDisplayValues();
@@ -4099,6 +4557,7 @@ function upgradeExistingSheet() {
       
       // Logistics Sync
       const newLogRowData = [];
+      let stayingAnswer = "";
       for (let i = 0; i < autoColCount; i++) {
            const logHeader = logHeaders[i];
            let mappedValue = "";
@@ -4110,6 +4569,7 @@ function upgradeExistingSheet() {
                for (const respHeader in responses) {
                    let hLower = respHeader.toLowerCase();
                    let val = responses[respHeader][0] || "";
+                   if (isStayingAtChurchField(respHeader) && val) stayingAnswer = val;
                    if (logHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
                    else if (logHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
                    else if (logHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
@@ -4117,10 +4577,7 @@ function upgradeExistingSheet() {
                    else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
                    else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
                    else if (logHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
-                   else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
-                   else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
                    else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
-                   else if (logHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
                    else if (logHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
                    else if (logHeader === "Emergency Contact Person" && hLower.includes("emergency contact person")) mappedValue = val;
                    else if (logHeader === "Emergency Contact Relationship" && hLower.includes("emergency contact relationship")) mappedValue = val;
@@ -4132,9 +4589,59 @@ function upgradeExistingSheet() {
       }
       const keyEmail = emailRecipient.toLowerCase().trim();
       const keyName = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
-      const saved = savedLogisticsData[keyEmail] || savedLogisticsData[keyName] || { room: "", group: "", notes: "" };
-      const manualData = [saved.room || "", saved.group || "", saved.notes || ""];
+      const saved = savedLogisticsData[keyEmail] || savedLogisticsData[keyName] || { room: "", building: "", bedSpot: "", lodgingNotes: "", group: "", notes: "" };
+      const manualData = [saved.group || "", saved.notes || ""];
       logisticsSheet.appendRow([...newLogRowData, ...manualData]);
+
+      // Dedicated Lodging Sync (only participants staying at host church)
+      if (!stayingAnswer) {
+        for (const respHeader in responses) {
+          if (isStayingAtChurchField(respHeader)) {
+            stayingAnswer = responses[respHeader][0] || "";
+            break;
+          }
+        }
+      }
+      const needsLodging = hasStayingQuestion ? isStayingAtChurchResponse(stayingAnswer) : true;
+      if (needsLodging) {
+        const newLodgRowData = [];
+        for (let i = 0; i < lodgAutoColCount; i++) {
+          const lHeader = lodgHeaders[i];
+          if (lHeader === "Status") {
+            newLodgRowData.push("Active");
+            continue;
+          }
+          let mappedValue = "";
+          if (lHeader === "First Name") mappedValue = firstName;
+          else if (lHeader === "Last Name") mappedValue = lastName;
+          else if (lHeader === "Email") mappedValue = emailRecipient;
+          else if (lHeader === "Phone") mappedValue = phone;
+          else {
+            for (const respHeader in responses) {
+              let hLower = respHeader.toLowerCase();
+              let val = responses[respHeader][0] || "";
+              if (lHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
+              else if (lHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
+              else if (lHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
+              else if (lHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
+              else if (lHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
+              else if (lHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
+              else if (lHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
+              else if (lHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
+              else if (lHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
+              else if (lHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
+              else if (lHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
+              else if (lHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
+              else if (lHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
+            }
+          }
+          const isPhoneCol = (lHeader === "Phone");
+          newLodgRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
+        }
+        const bldgFormulaOrVal = saved.building || getBuildingLookupFormula();
+        const lodgManual = [saved.room || "", bldgFormulaOrVal, saved.bedSpot || "", saved.lodgingNotes || ""];
+        lodgingSheet.appendRow([...newLodgRowData, ...lodgManual]);
+      }
   };
   
   if (responseData.length > 1) {
@@ -4154,12 +4661,450 @@ function upgradeExistingSheet() {
   if (logisticsSheet.getLastRow() > 1) {
      logisticsSheet.getRange(2, 1, logisticsSheet.getLastRow() - 1, logisticsSheet.getLastColumn()).sort([{column: 2, ascending: true}]);
   }
+  if (lodgingSheet.getLastRow() > 1) {
+     lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn()).sort([{column: 2, ascending: true}]);
+  }
 
   // 8. Create Airport Summary Sheet
   const hasAirport = selectedNames.some(n => n.includes("Arrival City/Airport") || n.includes("Departure City/Airport") || n.includes("Arrival Details") || n.includes("Departure Details"));
   setupAirportSummarySheet(ss, hasAirport);
 
-  ui.alert('Success', 'Spreadsheet successfully upgraded to the new V2 format!', ui.ButtonSet.OK);
+  ui.alert('Success', 'Spreadsheet successfully upgraded with dedicated Lodging and Room Inventory tabs!', ui.ButtonSet.OK);
+}
+
+/**
+ * Menu handler to non-destructively set up or synchronize the dedicated Lodging and Room Inventory tabs
+ * on an existing event response spreadsheet, migrating any existing room assignments from Logistics.
+ */
+function syncLodgingAndRoomsMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const prompt = ui.prompt(
+    'Setup / Sync Lodging & Room Inventory Tabs',
+    'Enter the Google Sheet URL of the event response spreadsheet:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (prompt.getSelectedButton() !== ui.Button.OK) return;
+  const url = prompt.getResponseText().trim();
+  if (!url) return;
+
+  let targetSs;
+  try {
+    targetSs = SpreadsheetApp.openByUrl(url);
+  } catch (err) {
+    ui.alert('Error', 'Could not open spreadsheet. Please check the URL and permissions: ' + err.message, ui.ButtonSet.OK);
+    return;
+  }
+
+  const result = syncLodgingAndRoomsForSheet(targetSs);
+  if (result.success) {
+    ui.alert('Success', result.message, ui.ButtonSet.OK);
+  } else {
+    ui.alert('Error', result.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Sidebar handler to set up / sync Lodging and Room Inventory tabs for a monitored event by formId.
+ */
+function syncLodgingAndRoomsByFormId(formId) {
+  if (!formId) throw new Error("No event selected.");
+  const props = PropertiesService.getScriptProperties();
+  const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const cfg = formsToMonitor[formId];
+  let sheetUrl = cfg && cfg.sheetUrl ? cfg.sheetUrl : "";
+  if (!sheetUrl) {
+    const form = FormApp.openById(formId);
+    const destId = form.getDestinationId();
+    if (!destId) throw new Error("No linked response spreadsheet found for this event.");
+    const targetSs = SpreadsheetApp.openById(destId);
+    return syncLodgingAndRoomsForSheet(targetSs);
+  }
+  const targetSs = SpreadsheetApp.openByUrl(sheetUrl);
+  return syncLodgingAndRoomsForSheet(targetSs);
+}
+
+/**
+ * Core non-destructive initializer/synchronizer for Lodging & Room Inventory tabs.
+ * Preserves existing Room Inventory rows and migrates any Room Assignments from Logistics or Lodging.
+ */
+function syncLodgingAndRoomsForSheet(targetSs) {
+  const responsesSheet = targetSs.getSheetByName("Form Responses 1");
+  if (!responsesSheet) {
+    return { success: false, message: 'Could not find "Form Responses 1" tab in this spreadsheet.' };
+  }
+
+  const respData = responsesSheet.getDataRange().getDisplayValues();
+  if (respData.length < 1) {
+    return { success: false, message: 'The "Form Responses 1" sheet contains no headers.' };
+  }
+
+  const selectedNames = respData[0].map(h => String(h).trim()).filter(Boolean);
+  const hasStayingQuestion = selectedNames.some(isStayingAtChurchField);
+
+  // Preserve any existing room assignments from Logistics and/or Lodging
+  const savedLodgingMap = {};
+  const existingLogSheet = targetSs.getSheetByName("Logistics");
+  if (existingLogSheet && existingLogSheet.getLastRow() > 1) {
+    const lVals = existingLogSheet.getDataRange().getValues();
+    const lH = lVals[0].map(h => String(h).trim());
+    const emailIdx = lH.indexOf("Email");
+    const firstIdx = lH.indexOf("First Name");
+    const lastIdx = lH.indexOf("Last Name");
+    const roomIdx = lH.indexOf("Room Assignment");
+    const notesIdx = lH.indexOf("Notes");
+
+    for (let r = 1; r < lVals.length; r++) {
+      const row = lVals[r];
+      const emailKey = emailIdx !== -1 ? String(row[emailIdx] || "").trim().toLowerCase() : "";
+      const nameKey = (firstIdx !== -1 && lastIdx !== -1) ?
+        `${String(row[firstIdx] || "").trim().toLowerCase()}_${String(row[lastIdx] || "").trim().toLowerCase()}` : "";
+      const entry = {
+        room: roomIdx !== -1 ? String(row[roomIdx] || "").trim() : "",
+        building: "",
+        bedSpot: "",
+        lodgingNotes: notesIdx !== -1 ? String(row[notesIdx] || "").trim() : ""
+      };
+      if (emailKey) savedLodgingMap[emailKey] = entry;
+      if (nameKey) savedLodgingMap[nameKey] = entry;
+    }
+  }
+
+  const existingLodgSheet = targetSs.getSheetByName("Lodging");
+  if (existingLodgSheet && existingLodgSheet.getLastRow() > 1) {
+    const ldVals = existingLodgSheet.getDataRange().getValues();
+    const ldH = ldVals[0].map(h => String(h).trim());
+    const emailIdx = ldH.indexOf("Email");
+    const firstIdx = ldH.indexOf("First Name");
+    const lastIdx = ldH.indexOf("Last Name");
+    const roomIdx = ldH.indexOf("Room Assignment");
+    const bldgIdx = ldH.indexOf("Building");
+    const bedIdx = ldH.indexOf("Bed / Spot");
+    const notesIdx = ldH.indexOf("Lodging Notes");
+
+    for (let r = 1; r < ldVals.length; r++) {
+      const row = ldVals[r];
+      const emailKey = emailIdx !== -1 ? String(row[emailIdx] || "").trim().toLowerCase() : "";
+      const nameKey = (firstIdx !== -1 && lastIdx !== -1) ?
+        `${String(row[firstIdx] || "").trim().toLowerCase()}_${String(row[lastIdx] || "").trim().toLowerCase()}` : "";
+      const prev = (emailKey && savedLodgingMap[emailKey]) || (nameKey && savedLodgingMap[nameKey]) || { room: "", building: "", bedSpot: "", lodgingNotes: "" };
+      if (roomIdx !== -1 && row[roomIdx]) prev.room = String(row[roomIdx]).trim();
+      if (bldgIdx !== -1 && row[bldgIdx]) prev.building = String(row[bldgIdx]).trim();
+      if (bedIdx !== -1 && row[bedIdx]) prev.bedSpot = String(row[bedIdx]).trim();
+      if (notesIdx !== -1 && row[notesIdx]) prev.lodgingNotes = String(row[notesIdx]).trim();
+      if (emailKey) savedLodgingMap[emailKey] = prev;
+      if (nameKey) savedLodgingMap[nameKey] = prev;
+    }
+  }
+
+  // Create/Rebuild Lodging and Room Inventory (preserving any rooms already in Room Inventory)
+  const lodgingSheet = setupLodgingSheet(targetSs, selectedNames);
+  const roomSheet = setupRoomInventorySheet(targetSs, lodgingSheet, true);
+  const lodgHeaders = lodgingSheet.getRange(1, 1, 1, lodgingSheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  const lodgAutoColCount = lodgHeaders.indexOf("Room Assignment") !== -1 ? lodgHeaders.indexOf("Room Assignment") : (lodgHeaders.length - 4);
+
+  let lodgingCount = 0;
+  let migratedRoomCount = 0;
+
+  if (respData.length > 1) {
+    const hRow = respData[0];
+    for (let r = 1; r < respData.length; r++) {
+      const rowData = respData[r];
+      const responses = {};
+      for (let i = 0; i < hRow.length; i++) {
+        responses[String(hRow[i])] = [String(rowData[i])];
+      }
+
+      let emailRecipient = (responses["Email Address"] && responses["Email Address"][0]) ? responses["Email Address"][0] : "";
+      let firstName = "Registrant", lastName = "", phone = "", stayingAnswer = "";
+
+      for (const header in responses) {
+        const hLower = header.toLowerCase();
+        const val = responses[header][0] || "";
+        if (!emailRecipient && hLower.includes("email") && !hLower.includes("minor")) emailRecipient = val;
+        if (hLower.includes("first name") && val) firstName = val;
+        else if (hLower.includes("last name")) lastName = val;
+        else if (hLower.includes("phone") && !hLower.includes("emergency")) phone = formatSheetTextValue(val, true);
+        if (isStayingAtChurchField(header) && val) stayingAnswer = val;
+      }
+
+      if (!emailRecipient && firstName === "Registrant" && !lastName) continue;
+
+      const needsLodging = hasStayingQuestion ? isStayingAtChurchResponse(stayingAnswer) : true;
+      if (!needsLodging) continue;
+
+      const newLodgRowData = [];
+      for (let i = 0; i < lodgAutoColCount; i++) {
+        const lHeader = lodgHeaders[i];
+        if (lHeader === "Status") {
+          newLodgRowData.push("Active");
+          continue;
+        }
+        let mappedValue = "";
+        if (lHeader === "First Name") mappedValue = firstName;
+        else if (lHeader === "Last Name") mappedValue = lastName;
+        else if (lHeader === "Email") mappedValue = emailRecipient;
+        else if (lHeader === "Phone") mappedValue = phone;
+        else {
+          for (const respHeader in responses) {
+            const hLower = respHeader.toLowerCase();
+            const val = responses[respHeader][0] || "";
+            if (lHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
+            else if (lHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
+            else if (lHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
+            else if (lHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
+            else if (lHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
+            else if (lHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
+            else if (lHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
+            else if (lHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
+            else if (lHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
+            else if (lHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
+            else if (lHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
+            else if (lHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
+            else if (lHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
+          }
+        }
+        newLodgRowData.push(formatSheetTextValue(mappedValue, lHeader === "Phone"));
+      }
+
+      const keyEmail = emailRecipient.toLowerCase().trim();
+      const keyName = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
+      const saved = savedLodgingMap[keyName] || savedLodgingMap[keyEmail] || { room: "", building: "", bedSpot: "", lodgingNotes: "" };
+      if (saved.room) migratedRoomCount++;
+
+      const bldgCell = getBuildingLookupFormula();
+      lodgingSheet.appendRow([...newLodgRowData, saved.room || "", bldgCell, saved.bedSpot || "", saved.lodgingNotes || ""]);
+      lodgingCount++;
+    }
+  }
+
+  if (lodgingSheet.getLastRow() > 1) {
+    lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn())
+                .sort([{column: 2, ascending: true}]);
+  }
+
+  // Refresh Summary Dashboard so Room Inventory capacity metrics are included
+  setupSummaryDashboard(targetSs, selectedNames);
+
+  return {
+    success: true,
+    lodgingCount: lodgingCount,
+    migratedRoomCount: migratedRoomCount,
+    message: `Successfully set up & synchronized the "Lodging" and "Room Inventory" sheets!\n\n• Synced ${lodgingCount} church-lodging participant(s) to "Lodging".\n• Preserved/migrated ${migratedRoomCount} room assignment(s).\n• Linked "Room Assignment" dropdowns and live capacity formulas to "Room Inventory".`
+  };
+}
+
+/**
+ * Menu handler to import a host church's separate room/building sheet into an event's Room Inventory tab.
+ */
+function importHostChurchRoomsMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const targetPrompt = ui.prompt(
+    'Import Host Church Rooms (Step 1 of 2)',
+    'Enter the Google Sheet URL of the Event Response Spreadsheet:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (targetPrompt.getSelectedButton() !== ui.Button.OK) return;
+  const targetUrl = targetPrompt.getResponseText().trim();
+  if (!targetUrl) return;
+
+  const sourcePrompt = ui.prompt(
+    'Import Host Church Rooms (Step 2 of 2)',
+    'Enter the Google Sheet URL of the Host Church Room List (or paste the same Event Sheet URL if they copied their room tab into the workbook):\n\nOptional: To specify a tab name, append #TabName at the end.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (sourcePrompt.getSelectedButton() !== ui.Button.OK) return;
+  const sourceInput = sourcePrompt.getResponseText().trim();
+  if (!sourceInput) return;
+
+  let sourceUrl = sourceInput;
+  let tabName = "";
+  if (sourceInput.includes("#") && !sourceInput.includes("#gid=")) {
+    const parts = sourceInput.split("#");
+    sourceUrl = parts[0].trim();
+    tabName = parts.slice(1).join("#").trim();
+  }
+
+  try {
+    const targetSs = SpreadsheetApp.openByUrl(targetUrl);
+    const result = importHostChurchRoomsToSheet(targetSs, sourceUrl, tabName);
+    if (result.success) {
+      ui.alert('Success', result.message, ui.ButtonSet.OK);
+    } else {
+      ui.alert('Notice', result.message, ui.ButtonSet.OK);
+    }
+  } catch (err) {
+    ui.alert('Error', 'Could not import rooms: ' + err.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Sidebar handler to import host church rooms into a monitored event's Room Inventory tab.
+ */
+function importHostChurchRoomsForEvent(formId, sourceUrlInput) {
+  if (!formId) throw new Error("No event selected.");
+  if (!sourceUrlInput || !String(sourceUrlInput).trim()) {
+    throw new Error("Please enter the Google Sheet URL (or tab name) of the Host Church's room sheet.");
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const cfg = formsToMonitor[formId];
+  let targetSs;
+  if (cfg && cfg.sheetUrl) {
+    targetSs = SpreadsheetApp.openByUrl(cfg.sheetUrl);
+  } else {
+    const form = FormApp.openById(formId);
+    const destId = form.getDestinationId();
+    if (!destId) throw new Error("No linked response spreadsheet found for this event.");
+    targetSs = SpreadsheetApp.openById(destId);
+  }
+
+  let raw = String(sourceUrlInput).trim();
+  let sourceUrl = raw;
+  let tabName = "";
+  if (!raw.startsWith("http")) {
+    // Treated as a tab name inside the target event spreadsheet itself
+    sourceUrl = targetSs.getUrl();
+    tabName = raw;
+  } else if (raw.includes("#") && !raw.includes("#gid=")) {
+    const parts = raw.split("#");
+    sourceUrl = parts[0].trim();
+    tabName = parts.slice(1).join("#").trim();
+  }
+
+  return importHostChurchRoomsToSheet(targetSs, sourceUrl, tabName);
+}
+
+/**
+ * Parses a host church's room spreadsheet/tab (matching Building, Room Name, Gender/Type, Capacity, Notes)
+ * and populates the event spreadsheet's Room Inventory tab + Lodging dropdowns.
+ */
+function importHostChurchRoomsToSheet(targetSs, sourceUrl, optionalTabName) {
+  const sourceSs = (sourceUrl && sourceUrl !== targetSs.getUrl()) ? SpreadsheetApp.openByUrl(sourceUrl) : targetSs;
+  const systemSheetNames = new Set([
+    "Form Responses 1", "Participants", "Logistics", "Lodging", "Room Inventory",
+    "Pickup", "Drop-Off", "Summary Dashboard", "Airport Summary", "System Log"
+  ]);
+
+  let sourceSheet = null;
+  if (optionalTabName) {
+    sourceSheet = sourceSs.getSheetByName(optionalTabName);
+    if (!sourceSheet) {
+      return { success: false, message: `Could not find a sheet tab named "${optionalTabName}" in "${sourceSs.getName()}".` };
+    }
+  } else if (sourceUrl && sourceUrl.includes("#gid=")) {
+    const gidMatch = sourceUrl.match(/[#&?]gid=([0-9]+)/);
+    if (gidMatch) {
+      const targetGid = Number(gidMatch[1]);
+      sourceSheet = sourceSs.getSheets().find(s => s.getSheetId() === targetGid) || null;
+    }
+  }
+
+  if (!sourceSheet) {
+    const allSheets = sourceSs.getSheets();
+    if (sourceSs.getId() === targetSs.getId()) {
+      sourceSheet = allSheets.find(s => !systemSheetNames.has(s.getName()) && !s.getName().endsWith("_Old")) || null;
+      if (!sourceSheet) {
+        return {
+          success: false,
+          message: `No external room sheet tab was found inside "${targetSs.getName()}". Please provide the URL of the Host Church's room spreadsheet, or specify the tab name.`
+        };
+      }
+    } else {
+      sourceSheet = allSheets[0];
+    }
+  }
+
+  const data = sourceSheet.getDataRange().getDisplayValues();
+  if (data.length < 2) {
+    return { success: false, message: `The sheet "${sourceSheet.getName()}" does not contain any room rows to import.` };
+  }
+
+  // Locate header row within the first 10 rows
+  let headerRowIdx = 0;
+  let bldgIdx = -1, roomIdx = -1, genderIdx = -1, capIdx = -1, notesIdx = -1;
+
+  for (let r = 0; r < Math.min(10, data.length); r++) {
+    const row = data[r].map(c => String(c || "").trim().toLowerCase());
+    const foundRoom = row.findIndex(c => c.includes("room") || c === "rm" || c.includes("dorm") || c.includes("classroom") || c.includes("房") || c.includes("室"));
+    const foundBldg = row.findIndex((c, idx) => idx !== foundRoom && (c.includes("building") || c.includes("bldg") || c.includes("hall") || c.includes("facility") || c.includes("wing") || c.includes("location") || c.includes("棟") || c.includes("大樓") || c.includes("建築")));
+    const foundCap = row.findIndex(c => c.includes("cap") || c.includes("max") || c.includes("bed") || c.includes("spot") || c.includes("limit") || c.includes("occupan") || c.includes("人數") || c.includes("容量") || c.includes("床"));
+
+    if (foundRoom !== -1 || (foundBldg !== -1 && foundCap !== -1)) {
+      headerRowIdx = r;
+      roomIdx = foundRoom;
+      bldgIdx = foundBldg;
+      capIdx = foundCap;
+      genderIdx = row.findIndex((c, idx) => idx !== roomIdx && idx !== bldgIdx && idx !== capIdx && (c.includes("gender") || c.includes("sex") || c.includes("type") || c.includes("group") || c.includes("designat") || c.includes("brother") || c.includes("sister") || c.includes("男") || c.includes("女") || c.includes("性別")));
+      notesIdx = row.findIndex((c, idx) => idx !== roomIdx && idx !== bldgIdx && idx !== capIdx && idx !== genderIdx && (c.includes("note") || c.includes("feature") || c.includes("desc") || c.includes("floor") || c.includes("bath") || c.includes("remark") || c.includes("備註") || c.includes("說明")));
+      break;
+    }
+  }
+
+  // Fallback positional mapping if headers are unconventional
+  if (roomIdx === -1 && bldgIdx === -1) {
+    if (data[0].length >= 2) {
+      bldgIdx = 0;
+      roomIdx = 1;
+      if (data[0].length >= 3) capIdx = 2;
+      if (data[0].length >= 4) notesIdx = 3;
+    } else {
+      roomIdx = 0;
+    }
+  } else if (roomIdx === -1 && bldgIdx !== -1) {
+    roomIdx = (bldgIdx === 0 && data[headerRowIdx].length > 1) ? 1 : 0;
+  }
+
+  const importedRooms = [];
+  const buildingsSet = new Set();
+
+  for (let r = headerRowIdx + 1; r < data.length; r++) {
+    const row = data[r];
+    const bldg = bldgIdx !== -1 ? String(row[bldgIdx] || "").trim() : "";
+    const rm = roomIdx !== -1 ? String(row[roomIdx] || "").trim() : "";
+    const gen = genderIdx !== -1 ? String(row[genderIdx] || "").trim() : "";
+    const rawCap = capIdx !== -1 ? String(row[capIdx] || "").trim() : "";
+    const notes = notesIdx !== -1 ? String(row[notesIdx] || "").trim() : "";
+
+    if (!rm && !bldg) continue;
+    if (rm.toLowerCase() === "total" || bldg.toLowerCase() === "total") continue;
+
+    let parsedCap = "";
+    if (rawCap) {
+      const numMatch = rawCap.match(/\d+/);
+      parsedCap = numMatch ? Number(numMatch[0]) : rawCap;
+    }
+
+    if (bldg) buildingsSet.add(bldg);
+    importedRooms.push([bldg, rm || bldg, gen, parsedCap, notes]);
+  }
+
+  if (importedRooms.length === 0) {
+    return { success: false, message: `No valid room records were found in "${sourceSheet.getName()}".` };
+  }
+
+  // Ensure Lodging sheet exists (or initialize it via syncLodgingAndRoomsForSheet if missing)
+  let lodgingSheet = targetSs.getSheetByName("Lodging");
+  if (!lodgingSheet) {
+    syncLodgingAndRoomsForSheet(targetSs);
+    lodgingSheet = targetSs.getSheetByName("Lodging");
+  }
+
+  // Rebuild Room Inventory with the newly imported rooms
+  const roomSheet = setupRoomInventorySheet(targetSs, lodgingSheet, false);
+  if (roomSheet.getMaxRows() < importedRooms.length + 20) {
+    roomSheet.insertRowsAfter(roomSheet.getMaxRows(), (importedRooms.length + 20) - roomSheet.getMaxRows());
+  }
+  roomSheet.getRange(2, 1, importedRooms.length, 5).setValues(importedRooms);
+  // Re-run setupRoomInventorySheet with preserveExistingRooms=true to ensure formulas cover all imported rows
+  setupRoomInventorySheet(targetSs, lodgingSheet, true);
+
+  return {
+    success: true,
+    importedCount: importedRooms.length,
+    buildingCount: buildingsSet.size,
+    message: `Successfully imported ${importedRooms.length} room(s)${buildingsSet.size > 0 ? ` across ${buildingsSet.size} building(s)` : ''} from "${sourceSheet.getName()}" into "Room Inventory"!\n\nThe "Room Assignment" dropdown on the "Lodging" tab is now linked to your imported rooms.`
+  };
 }
 
 /**

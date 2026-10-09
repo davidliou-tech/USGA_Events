@@ -86,12 +86,25 @@ When attendees register, their data automatically populates the specialized tabs
   * Inbound and outbound travel records are added automatically and sorted chronologically by **Date then Time**.
   * **Assigning Drivers:** Enter volunteer driver names directly into the *Driver Full Name* and *Driver Phone Number* columns next to the passenger. Your driver assignments will stay securely linked to the passenger even as new attendees register and the list updates.
 
-* **Logistics Sheet (Lodging & Special Needs):**
-  * Lists all participants requiring church lodging, their sleep preferences, and dietary restrictions.
-  * **Assigning Rooms:** Enter room or dorm assignments directly in the *Room Assignment* column.
+* **Logistics Sheet (General Roster, Medical/Dietary & Group Assignments):**
+  * Lists all participants for on-site registration check-in, dietary restrictions (`Food/Medicine Restrictions`), mobility needs, and parental/emergency contacts.
+  * **Staying at Host Church? Column:** Clear visual badges highlight on-site attendees (soft green) vs. commuters/hotel attendees (soft gray).
+  * **Team/Group Assignment:** Assign discussion, workshop, or fellowship teams in the *Group/Team* and *Notes* columns.
+
+* **Lodging Sheet (Dedicated Host Church Rooming):**
+  * Automatically filters to **only participants staying at the host church** (keeping the lodging view clean and uncluttered by non-lodging registrants).
+  * Consolidates all lodging-specific questions: arrival/departure lodging dates, sleeping bag/pillow requests, sleep preferences & habits, and special accommodations.
+  * **Room Assignment Dropdown:** Linked directly to the *Room Inventory* sheet. Selecting a room automatically displays the building and updates room capacity counts. If a participant later changes their response to self-arranged lodging, their row is marked `CANCELLED` with a strikethrough so their room spot is freed up immediately.
+  * **Manual Columns:** Assign *Room Assignment*, *Building*, *Bed / Spot*, and *Lodging Notes* without interfering with automated registration sorting.
+
+* **Room Inventory Sheet (Host Church Building & Capacity Planner):**
+  * A dedicated sheet where host church logistics teams define their physical facility: *Building Name*, *Room Name / #*, *Gender / Designation* (Male, Female, Family, Staff, Any), *Max Capacity*, and *Room Notes*.
+  * **Live Capacity Tracking:** Pre-built formulas automatically calculate *Assigned Count* and *Remaining Capacity* (green when spots are open, yellow when full, and bold red if over-capacity).
+  * **Live Room Rosters:** Column I (*Assigned Occupants*) automatically lists every person assigned to each room in real time.
+  * **Importing Existing Room Lists:** Host churches can either copy-paste their room lists directly into Columns A–E of *Room Inventory*, or coordinators can use the **Import Host Church Rooms** tool in **Manage Active Events** (or **USGA Events > Advanced Maintenance**) to import from an external Google Sheet URL in seconds.
 
 * **Summary Dashboard & Airport Summary:**
-  * **Summary Dashboard:** Provides at-a-glance charts and counts for gender breakdowns, meals, church lodging requests, and dietary needs.
+  * **Summary Dashboard:** Provides at-a-glance charts and counts for gender breakdowns, meals, church lodging requests, total room capacity vs. assigned occupants, and dietary needs.
   * **Airport Summary:** Summarizes passenger arrival and departure volumes by airport code so you can schedule shuttles efficiently.
 
 ---

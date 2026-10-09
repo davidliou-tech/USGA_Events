@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.3 (Current) - Host Church Logistics, Lodging Standardization & International Phone Fix](#version-293)
+- [Version 2.9.4 (Current) - Dedicated Lodging Sheet, Room Inventory & Host Church Room Import](#version-294)
+- [Version 2.9.3 - Host Church Logistics, Lodging Standardization & International Phone Fix](#version-293)
 - [Version 2.9.2 - Maintenance & Lifecycle Optimization](#version-292)
 - [Version 2.9.1 - Active Events Performance & System Log Auto-Sync](#version-291)
 - [Version 2.9.0 - Multi-Child Composite Key Fix & Translation Engine Optimization](#version-290)
@@ -18,6 +19,37 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-294"></a>
+## Version 2.9.4
+*October 2026*
+
+### Dedicated `Lodging` Sheet & Streamlined `Logistics` Roster
+- **Separation of Concerns Between `Logistics` and `Lodging`**:
+  - **Streamlined `Logistics` Sheet (`setupLogisticsSheet`)**: Decluttered the general `Logistics` roster by removing lodging-only planning columns (`Lodging Before`, `Lodging After`, `Sleep Preferences & Habits`, and `Room Assignment`). `Logistics` now focuses cleanly on registration check-in, demographics, `Staying at Host Church?` status badges, `Food/Medicine Restrictions`, `Other Special Needs`, emergency contacts, and `Group/Team` + `Notes`.
+  - **Dedicated `Lodging` Sheet (`setupLodgingSheet`)**: Created a dedicated `Lodging` tab that automatically filters to **only participants staying at the host church** (mirroring the `Pickup` and `Drop-Off` pattern).
+  - **Comprehensive Lodging Columns**: Includes `First Name`, `Last Name`, `Email`, `Phone`, `Gender`, `Age`, `Age Group`, `Grade`, `Parent/Guardian`, `Local Church/Place of Worship`, `Staying at Host Church?`, `Lodging Before`, `Lodging After`, **`Exact Lodging Dates`** (`Specify exact dates of arrival/departure for lodging`), **`Sleeping Bag/Pillow`**, `Sleep Preferences & Habits`, `Other Special Needs`, and `Status` (`Active` / `UPDATED` / `CANCELLED`), followed by manual/formula rooming columns: **`Room Assignment`**, **`Building`**, **`Bed / Spot`**, and **`Lodging Notes`**.
+  - **Live Cancellation & Update Tracking**: In `masterRespondToRegistration()`, if a registrant switches from host-church lodging to self-arranged lodging, their row on `Lodging` is marked `CANCELLED` with a red strikethrough (`#f4cccc`) and automatically excluded from room capacity counts. If they update their lodging dates or sleep preferences, their status highlights as `UPDATED` (`#fff2cc`).
+  - **Sort-Safe Building Auto-Lookup**: Added `getBuildingLookupFormula()` using relative `INDIRECT("RC[-1]", FALSE)` VLOOKUP so that selecting a `Room Assignment` automatically populates the `Building` column and remains intact even when the `Lodging` sheet re-sorts alphabetically by `Last Name`.
+
+### Built-In `Room Inventory` Tab & Host Church Room Importer
+- **Structured `Room Inventory` Sheet (`setupRoomInventorySheet`)**:
+  - **Host Church Input Columns (Columns A–E)**: `Building Name`, `Room Name / #`, `Gender / Designation` (dropdown: `Male / Brothers`, `Female / Sisters`, `Family / Couples`, `Counselors / Staff`, `Flexible / Any`), `Max Capacity`, and `Room Features / Notes`.
+  - **Beginner-Friendly Hover Notes (Comment Boxes)**: Added Google Sheets cell notes (`.setNotes()`) to every header on `Room Inventory` (Columns A–I) and to the yellow manual columns on `Lodging` (`Room Assignment`, `Building`, `Bed / Spot`, `Lodging Notes`) with clear instructions and examples for non-technical church volunteers.
+  - **Automated Live Tracking Columns (Columns F–I)**:
+    - `Room Assignment Key` (`Building - Room` composite label used by the `Lodging` dropdown).
+    - `Assigned Count` (live `COUNTIFS` against active assignments on `Lodging`).
+    - `Remaining Capacity` (`Max Capacity - Assigned Count`, with conditional formatting: **Green** when spots remain, **Yellow** when full `= 0`, and **Bold Red** if over-capacity `< 0`).
+    - `Assigned Occupants (Live Roster)` (live `FILTER` + `TEXTJOIN` listing every occupant assigned to that room).
+- **One-Click Host Church Room Importer (`importHostChurchRoomsMenu` & Sidebar)**:
+  - Added **USGA Events > Advanced Maintenance > Import Host Church Rooms into Event Sheet** and an interactive **🏨 Lodging & Room Inventory** panel inside `ManageEventsSidebar.html`.
+  - Automatically detects `Building`, `Room Name / #`, `Gender / Type`, `Capacity`, and `Notes` columns (in English or Traditional Chinese) from an external Host Church Google Sheet URL or a copied tab, populates `Room Inventory`, and binds the `Room Assignment` dropdown on `Lodging`.
+- **Non-Destructive Lodging & Room Syncer (`syncLodgingAndRoomsMenu` & Sidebar)**:
+  - Added **USGA Events > Advanced Maintenance > Setup / Sync Lodging & Room Inventory Tabs** (and sidebar button) to upgrade active event spreadsheets in place, migrating any existing `Room Assignment` entries from `Logistics` into `Lodging` while preserving existing `Room Inventory` definitions.
+- **Summary Dashboard Room Capacity Metrics**:
+  - Added `Total Room Capacity (Room Inventory)`, `Assigned to Rooms`, and `Remaining Room Capacity` to `Summary Dashboard`.
 
 ---
 
