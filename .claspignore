@@ -1,5 +1,6 @@
 **/*
 !Code.gs
+!TransportationSync.gs
 !Sidebar.html
 !ManageEventsSidebar.html
 !appsscript.json

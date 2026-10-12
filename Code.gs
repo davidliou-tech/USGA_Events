@@ -17,12 +17,21 @@ function onOpen() {
           .addItem('Setup Historical Forms Description Audit Sheet', 'setupAuditSheet')
           .addItem('Run Historical Forms Description Audit', 'runAudit'))
       .addSeparator()
+      .addSubMenu(ui.createMenu('Transportation & Drivers')
+          .addItem('Generate Public Driver Signup Sheet (Active Sheet)', 'generatePublicTransportationSheetMenu')
+          .addItem('Enable Public Transportation for Event (by Sheet URL)', 'enablePublicTransportationForSheetUrlMenu')
+          .addItem('Sync Transportation & Drivers Now', 'syncPublicTransportationMenu')
+          .addItem('Generate Driver Summary Roster', 'generateDriverSummaryRosterMenu')
+          .addSeparator()
+          .addItem('Install Auto-Sync Trigger (15 Mins)', 'installTransportationTriggerMenu'))
+      .addSeparator()
       .addSubMenu(ui.createMenu('Advanced Maintenance')
           .addItem('Sync Active Events from System Log', 'syncActiveEventsFromSystemLogMenu')
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
           .addItem('Setup / Sync Lodging & Room Inventory Tabs', 'syncLodgingAndRoomsMenu')
           .addItem('Import Host Church Rooms into Event Sheet', 'importHostChurchRoomsMenu')
           .addItem('Sync Logistics "Staying at Church" Column', 'syncLogisticsStayingAtChurchMenu')
+          .addItem('Setup / Sync Public Transportation for Event (by URL)', 'enablePublicTransportationForSheetUrlMenu')
           .addItem('Clean Up Dead Triggers', 'cleanupDeadTriggers')
           .addItem('Delete ALL Triggers (Reset)', 'deleteAllTriggers')
           .addSeparator()
@@ -544,13 +553,20 @@ function setupTransportationSheets(ss) {
     "First Name", "Last Name", "Email", "Phone Number", 
     "Arrival Details", "Arrival Date", "Arrival Time", 
     "Departing City/Airport", "Arrival City/Airport", "Arrival Airline", "Arrival Flight Number", "Arrival Train/Bus Station", "Arrival Carrier", "Arrival Train/Bus Number", 
-    "Status", "Driver Full Name", "Driver Phone Number"
+    "Status", "Driver Full Name", "Driver Phone Number",
+    "Trip Sub-ID", "Vehicle Slot", "Driver Vehicle / Notes", "Coordinator Status", "One-Click Dispatch SMS Text"
   ]);
   pickupSheet.getRange(1, 1, 1, pickupSheet.getLastColumn()).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
   pickupSheet.setFrozenRows(1);
   if (pickupSheet.getMaxRows() > 1) {
     pickupSheet.getRange(2, 4, pickupSheet.getMaxRows() - 1, 1).setNumberFormat("@");
     pickupSheet.getRange(2, 17, pickupSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    pickupSheet.getRange(2, 18, pickupSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    const statusRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["Unassigned", "Driver Claimed", "Confirmed / Contacted", "Reassign Needed", "Completed"], true)
+      .setAllowInvalid(false)
+      .build();
+    pickupSheet.getRange(2, 21, pickupSheet.getMaxRows() - 1, 1).setDataValidation(statusRule);
   }
   if (!pickupSheet.getFilter()) {
     pickupSheet.getRange(1, 1, pickupSheet.getMaxRows(), pickupSheet.getLastColumn()).createFilter();
@@ -566,13 +582,20 @@ function setupTransportationSheets(ss) {
     "First Name", "Last Name", "Email", "Phone Number", 
     "Departure Details", "Departure Date", "Departure Time", 
     "Departure City/Airport", "Departure Airline", "Departure Flight Number", "Destination City/Airport", "Departure Train/Bus Station", "Departure Carrier", "Departure Train/Bus Number", 
-    "Status", "Driver Full Name", "Driver Phone Number"
+    "Status", "Driver Full Name", "Driver Phone Number",
+    "Trip Sub-ID", "Vehicle Slot", "Driver Vehicle / Notes", "Coordinator Status", "One-Click Dispatch SMS Text"
   ]);
   dropoffSheet.getRange(1, 1, 1, dropoffSheet.getLastColumn()).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
   dropoffSheet.setFrozenRows(1);
   if (dropoffSheet.getMaxRows() > 1) {
     dropoffSheet.getRange(2, 4, dropoffSheet.getMaxRows() - 1, 1).setNumberFormat("@");
     dropoffSheet.getRange(2, 17, dropoffSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    dropoffSheet.getRange(2, 18, dropoffSheet.getMaxRows() - 1, 1).setNumberFormat("@");
+    const statusRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["Unassigned", "Driver Claimed", "Confirmed / Contacted", "Reassign Needed", "Completed"], true)
+      .setAllowInvalid(false)
+      .build();
+    dropoffSheet.getRange(2, 21, dropoffSheet.getMaxRows() - 1, 1).setDataValidation(statusRule);
   }
   if (!dropoffSheet.getFilter()) {
     dropoffSheet.getRange(1, 1, dropoffSheet.getMaxRows(), dropoffSheet.getLastColumn()).createFilter();
@@ -3053,6 +3076,18 @@ function masterRespondToRegistration(e) {
           lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn())
                       .sort([{column: 2, ascending: true}]);
         }
+      }
+
+      // Automatically sync with Public Transport Sheet if configured
+      try {
+        if (typeof getTransportationSettings === "function" && typeof syncTransportation === "function") {
+          const tSettings = getTransportationSettings(responseSs);
+          if (tSettings && tSettings.publicTransportSheetId) {
+            syncTransportation(responseSs);
+          }
+        }
+      } catch (tErr) {
+        Logger.log("Automated public transportation sync deferred/skipped: " + tErr.message);
       }
 
     } catch(err) {

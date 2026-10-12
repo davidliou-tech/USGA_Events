@@ -166,6 +166,29 @@
         </div>
       </div>
 
+      <!-- Host Church Transportation & Driver Management -->
+      <div style="margin-top: 14px; margin-bottom: 14px; padding: 10px; background: #e8f0fe; border: 1px solid #d2e3fc; border-radius: 6px;">
+        <div style="font-weight: bold; font-size: 12px; color: #1a73e8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+          <span>🚗 Transportation & Drivers</span>
+        </div>
+        <div style="font-size: 11px; color: #3c4043; margin-bottom: 8px; line-height: 1.3;" id="transportStatusText">
+          Dual-sheet sync with public driver signups (masked attendee names, zero contact PII).
+        </div>
+        <div style="display: flex; gap: 4px; margin-bottom: 6px;">
+          <button type="button" id="syncTransportBtn" onclick="syncTransportationForCurrentEvent()" style="flex: 1; padding: 6px 8px; font-size: 11px; border-radius: 4px; border: 1px solid #1a73e8; background: #fff; color: #1a73e8; font-weight: bold; cursor: pointer;">
+            🔄 Sync Drivers
+          </button>
+          <button type="button" id="generatePublicSheetBtn" onclick="generatePublicTransportForCurrentEvent()" style="flex: 1; padding: 6px 8px; font-size: 11px; border-radius: 4px; border: 1px solid #1a73e8; background: #1a73e8; color: #fff; font-weight: bold; cursor: pointer;">
+            📋 Setup Public Sheet
+          </button>
+        </div>
+        <div id="publicTransportLinkContainer" style="display: none; font-size: 11px; margin-top: 4px;">
+          <a id="publicTransportLink" href="#" target="_blank" style="color: #1a73e8; font-weight: bold; text-decoration: none;">
+            🔗 Open Public Driver Sheet ↗
+          </a>
+        </div>
+      </div>
+
       <!-- Action Buttons -->
       <div class="form-group" style="margin-top: 15px; display: flex; flex-direction: column; gap: 8px;">
         <button class="action" id="saveBtn" onclick="saveChanges()" style="width: 100%;">Save Changes</button>
@@ -309,6 +332,25 @@
             document.getElementById('statusBadgeText').innerText = 'Status check failed: ' + err.message;
           })
           .getEventDetails(formId);
+
+        // Fetch transportation status on-demand
+        google.script.run
+          .withSuccessHandler(function(tInfo) {
+            const linkCont = document.getElementById('publicTransportLinkContainer');
+            const link = document.getElementById('publicTransportLink');
+            const statusText = document.getElementById('transportStatusText');
+            if (tInfo && tInfo.configured) {
+              statusText.innerHTML = `Connected (${tInfo.pickupCount} pickups, ${tInfo.dropoffCount} drop-offs).`;
+              if (tInfo.publicSheetUrl) {
+                link.href = tInfo.publicSheetUrl;
+                linkCont.style.display = 'block';
+              }
+            } else {
+              statusText.innerHTML = 'Public driver sheet is not yet setup for this event.';
+              linkCont.style.display = 'none';
+            }
+          })
+          .getTransportationStatusByFormId(formId);
       }
 
       function updateActionLinks(ev) {
@@ -590,6 +632,70 @@
             status.innerHTML = '<strong>Error:</strong> ' + err.message;
           })
           .importHostChurchRoomsForEvent(formId, sourceUrl);
+      }
+
+      function syncTransportationForCurrentEvent() {
+        const formId = document.getElementById('eventSelect').value;
+        if (!formId) return;
+        const btn = document.getElementById('syncTransportBtn');
+        const status = document.getElementById('status');
+        btn.disabled = true;
+        status.className = 'loading';
+        status.innerHTML = '<span class="spinner"></span> Syncing transportation runs and volunteer drivers...';
+        status.style.display = 'block';
+
+        google.script.run
+          .withSuccessHandler(function(res) {
+            btn.disabled = false;
+            if (res && res.success) {
+              status.className = 'success';
+              status.innerHTML = '<strong>Success!</strong> ' + res.message.replace(/\n/g, '<br>');
+            } else {
+              status.className = 'error';
+              status.innerHTML = '<strong>Notice:</strong> ' + (res ? res.message : 'Unable to sync.');
+            }
+          })
+          .withFailureHandler(function(err) {
+            btn.disabled = false;
+            status.className = 'error';
+            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+          })
+          .syncTransportationByFormId(formId);
+      }
+
+      function generatePublicTransportForCurrentEvent() {
+        const formId = document.getElementById('eventSelect').value;
+        if (!formId) return;
+        const btn = document.getElementById('generatePublicSheetBtn');
+        const status = document.getElementById('status');
+        btn.disabled = true;
+        status.className = 'loading';
+        status.innerHTML = '<span class="spinner"></span> Creating Public Driver Signup sheet and syncing runs...';
+        status.style.display = 'block';
+
+        google.script.run
+          .withSuccessHandler(function(res) {
+            btn.disabled = false;
+            if (res && res.success) {
+              status.className = 'success';
+              status.innerHTML = '<strong>Success!</strong> ' + res.message.replace(/\n/g, '<br>');
+              if (res.sheetUrl) {
+                const linkCont = document.getElementById('publicTransportLinkContainer');
+                const link = document.getElementById('publicTransportLink');
+                link.href = res.sheetUrl;
+                linkCont.style.display = 'block';
+              }
+            } else {
+              status.className = 'error';
+              status.innerHTML = '<strong>Error:</strong> ' + (res ? res.message : 'Failed to create sheet.');
+            }
+          })
+          .withFailureHandler(function(err) {
+            btn.disabled = false;
+            status.className = 'error';
+            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+          })
+          .generatePublicTransportationByFormId(formId);
       }
 
       function showInlineSuccess(msg) {
