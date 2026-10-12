@@ -1234,6 +1234,26 @@ function createPublicTransportationWorkbook(masterSs) {
   setTransportationSetting(masterSs, "PublicTransportSheetId", newId);
   setTransportationSetting(masterSs, "PublicTransportSheetUrl", newSs.getUrl());
 
+  // Register this event response sheet in ScriptProperties so background sync always includes it
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const trackedIds = JSON.parse(props.getProperty("PublicTransportEventSheetIds") || "[]");
+    const masterId = masterSs.getId();
+    if (!trackedIds.includes(masterId)) {
+      trackedIds.push(masterId);
+      props.setProperty("PublicTransportEventSheetIds", JSON.stringify(trackedIds));
+    }
+  } catch (propErr) {
+    Logger.log("Could not register event sheet ID in PublicTransportEventSheetIds: " + propErr.message);
+  }
+
+  // Automatically ensure the 15-minute background sync trigger is installed
+  try {
+    ensureTransportationSyncTrigger();
+  } catch (trigErr) {
+    Logger.log("Could not auto-install transportation sync trigger: " + trigErr.message);
+  }
+
   // Execute initial Push Sync
   pushTransportationToPublic(masterSs, newSs, {});
 
@@ -1242,7 +1262,7 @@ function createPublicTransportationWorkbook(masterSs) {
     sheetId: newId,
     sheetUrl: newSs.getUrl(),
     folderName: folderName,
-    message: `Public Driver Signup sheet created in folder "${folderName}"!\n\nURL: ${newSs.getUrl()}`
+    message: `Public Driver Signup sheet created in folder "${folderName}" (15-min auto-sync active)!\n\nURL: ${newSs.getUrl()}`
   };
 }
 
@@ -1251,7 +1271,22 @@ function createPublicTransportationWorkbook(masterSs) {
 // ============================================================================
 
 /**
- * Installs an automated background time-driven trigger to run syncTransportation every 15 minutes.
+ * Ensures at least one 15-minute time-based trigger for `backgroundTransportationSync` exists.
+ * Does not delete/recreate the trigger if one is already active.
+ */
+function ensureTransportationSyncTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const exists = triggers.some(t => t.getHandlerFunction() === "backgroundTransportationSync");
+  if (!exists) {
+    ScriptApp.newTrigger("backgroundTransportationSync")
+      .timeBased()
+      .everyMinutes(15)
+      .create();
+  }
+}
+
+/**
+ * Installs (or resets) an automated background time-driven trigger to run syncTransportation every 15 minutes.
  */
 function installTransportationSyncTrigger(masterSs) {
   // Remove existing transportation triggers to avoid duplicates
@@ -1272,12 +1307,13 @@ function installTransportationSyncTrigger(masterSs) {
 
 /**
  * Background cron execution handler.
- * Syncs both the active spreadsheet (if configured) and any monitored event spreadsheets
- * in `FormsToMonitor` that have a configured Public Driver Signup Sheet.
+ * Syncs the active spreadsheet (if configured), all monitored event spreadsheets in `FormsToMonitor`,
+ * and any standalone event spreadsheets registered in `PublicTransportEventSheetIds`.
  */
 function backgroundTransportationSync() {
   const syncedSheetIds = new Set();
 
+  // 1. Active Spreadsheet (if any)
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (ss) {
@@ -1291,6 +1327,7 @@ function backgroundTransportationSync() {
     Logger.log("Background Transportation Sync (Active SS) Error: " + err.message);
   }
 
+  // 2. Monitored Events in FormsToMonitor
   try {
     const props = PropertiesService.getScriptProperties();
     const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
@@ -1307,6 +1344,24 @@ function backgroundTransportationSync() {
         }
       } catch (innerErr) {
         Logger.log(`Background Transportation Sync skipped for form ${formId}: ${innerErr.message}`);
+      }
+    }
+
+    // 3. Any additional event sheets registered via PublicTransportEventSheetIds
+    const trackedIds = JSON.parse(props.getProperty("PublicTransportEventSheetIds") || "[]");
+    for (let i = 0; i < trackedIds.length; i++) {
+      const sheetId = trackedIds[i];
+      if (!sheetId || syncedSheetIds.has(sheetId)) continue;
+      try {
+        const targetSs = SpreadsheetApp.openById(sheetId);
+        if (!targetSs) continue;
+        const tConfig = getTransportationSettings(targetSs);
+        if (tConfig.publicTransportSheetId) {
+          syncTransportation(targetSs);
+          syncedSheetIds.add(sheetId);
+        }
+      } catch (innerErr) {
+        Logger.log(`Background Transportation Sync skipped for sheet ID ${sheetId}: ${innerErr.message}`);
       }
     }
   } catch (err) {

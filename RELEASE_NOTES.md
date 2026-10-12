@@ -51,7 +51,7 @@ This document provides a complete, unified historical record of all versions, fe
   - **Protected Ranges**: Locks schedule, flight, and passenger columns against public tampering while unprotecting only the Driver Input columns (`Columns H:K`).
 - **Dedicated Driver Roster & Concurrency Safety**:
   - **Driver Summary Roster**: Adds an automated `Driver Roster` tab in Master grouping all assignments chronologically by volunteer driver.
-  - **Multi-Event Background Sync (`backgroundTransportationSync`)**: Automated 15-minute cron trigger iterates across all active monitored events in `FormsToMonitor` that have a linked `PublicTransportSheetId`, ensuring hands-free bidirectional synchronization.
+  - **Zero-Touch Auto-Sync Activation (`ensureTransportationSyncTrigger` & `backgroundTransportationSync`)**: Creating a Public Driver Signup Sheet automatically installs/verifies the 15-minute background trigger and registers the event in `PublicTransportEventSheetIds` (alongside `FormsToMonitor`), ensuring hands-free bidirectional synchronization without requiring manual trigger setup.
   - **LockService Concurrency**: Prevents race conditions during simultaneous public edits using script-level locking and atomic batch writing.
 - **Active Events Sidebar Integration**:
   - Added a dedicated **🚗 Transportation & Drivers** card inside `ManageEventsSidebar.html` with real-time status display and one-click sync / setup buttons.
