@@ -1173,9 +1173,10 @@ function resolveEventRegistrationFolder(masterSs, eventTitle) {
 }
 
 /**
- * Creates a brand-new Public Driver Signup Spreadsheet, places it in the event's
- * registration Drive folder (same folder as the Event Response Sheet) using Shared-Drive-compatible
- * `File.moveTo()`, stores its ID/URL in Settings, and executes the first Push sync.
+ * Creates a brand-new Public Driver Signup Spreadsheet (or reuses & syncs the existing one if
+ * a valid, non-trashed Public Sheet already exists for the event), places it in the event's
+ * registration Drive folder using Shared-Drive-compatible `File.moveTo()`, stores its ID/URL in
+ * Settings, and executes an initial sync.
  * 
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} masterSs
  * @returns {Object} Result with public sheet URL and ID.
@@ -1200,8 +1201,77 @@ function createPublicTransportationWorkbook(masterSs) {
 
   // Locate the event's registration Drive folder
   const parentFolder = resolveEventRegistrationFolder(masterSs, eventTitle);
+  const resolvedFolderName = parentFolder ? parentFolder.getName() : "My Drive";
 
-  // Create new Spreadsheet
+  // -------------------------------------------------------------------------
+  // DUPLICATE-PREVENTION GUARD: Reuse existing non-trashed Public Sheet if present
+  // -------------------------------------------------------------------------
+  let existingSs = null;
+  let existingFile = null;
+
+  // 1. Check by saved PublicTransportSheetId in Settings
+  if (config.publicTransportSheetId) {
+    try {
+      const f = DriveApp.getFileById(config.publicTransportSheetId);
+      if (f && !f.isTrashed()) {
+        existingSs = SpreadsheetApp.openById(config.publicTransportSheetId);
+        existingFile = f;
+      }
+    } catch (e) {
+      Logger.log("Saved PublicTransportSheetId is no longer accessible or was deleted: " + e.message);
+    }
+  }
+
+  // 2. Fallback: Check if a non-trashed sheet with the exact publicFileName already exists in parentFolder
+  if (!existingSs && parentFolder) {
+    try {
+      const folderFiles = parentFolder.getFilesByName(publicFileName);
+      while (folderFiles.hasNext()) {
+        const candidate = folderFiles.next();
+        if (!candidate.isTrashed() && candidate.getMimeType() === MimeType.GOOGLE_SHEETS) {
+          existingSs = SpreadsheetApp.openById(candidate.getId());
+          existingFile = candidate;
+          break;
+        }
+      }
+    } catch (e) {
+      Logger.log("Could not scan parentFolder for existing Public Sheet: " + e.message);
+    }
+  }
+
+  if (existingSs && existingFile) {
+    const existingId = existingSs.getId();
+    const existingUrl = existingSs.getUrl();
+
+    setTransportationSetting(masterSs, "PublicTransportSheetId", existingId);
+    setTransportationSetting(masterSs, "PublicTransportSheetUrl", existingUrl);
+
+    try {
+      const props = PropertiesService.getScriptProperties();
+      const trackedIds = JSON.parse(props.getProperty("PublicTransportEventSheetIds") || "[]");
+      const masterId = masterSs.getId();
+      if (!trackedIds.includes(masterId)) {
+        trackedIds.push(masterId);
+        props.setProperty("PublicTransportEventSheetIds", JSON.stringify(trackedIds));
+      }
+      ensureTransportationSyncTrigger();
+    } catch (e) {}
+
+    syncTransportation(masterSs);
+
+    return {
+      success: true,
+      reusedExisting: true,
+      sheetId: existingId,
+      sheetUrl: existingUrl,
+      folderName: resolvedFolderName,
+      message: `An active Public Driver Signup sheet already exists in folder "${resolvedFolderName}" — synced the existing sheet instead of creating a duplicate!\n\nURL: ${existingUrl}`
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // CREATE NEW PUBLIC SPREADSHEET (No existing active sheet found)
+  // -------------------------------------------------------------------------
   const newSs = SpreadsheetApp.create(publicFileName);
   const newId = newSs.getId();
   const newFile = DriveApp.getFileById(newId);
@@ -1260,6 +1330,7 @@ function createPublicTransportationWorkbook(masterSs) {
 
   return {
     success: true,
+    reusedExisting: false,
     sheetId: newId,
     sheetUrl: newSs.getUrl(),
     folderName: folderName,
@@ -1408,64 +1479,29 @@ function resolveTargetEventSpreadsheetForMenu(ui, menuTitle) {
 }
 
 /**
- * UI Menu: Generate Public Driver Signup Sheet
+ * UI Menu: Setup / Sync Public Driver Signup Sheet
+ * Creates the Public Driver Signup Sheet in the event's registration folder if none exists yet,
+ * or reuses and syncs the existing sheet without creating duplicates.
  */
 function generatePublicTransportationSheetMenu() {
   const ui = SpreadsheetApp.getUi();
-  const targetSs = resolveTargetEventSpreadsheetForMenu(ui, "Generate Public Driver Signup Sheet");
+  const targetSs = resolveTargetEventSpreadsheetForMenu(ui, "Setup / Sync Public Driver Signup Sheet");
   if (!targetSs) return;
-
-  const confirm = ui.alert(
-    "Generate Public Driver Signup Sheet",
-    `Target Event Sheet: "${targetSs.getName()}"\n\n` +
-    "This will create a new, separate Google Sheet in that event's registration folder for church volunteer drivers.\n\n" +
-    "• Zero attendee PII (masked names only).\n" +
-    "• Automatically splits high-volume flights into car slots (max 4 passengers).\n" +
-    "• Public can only enter Driver Name, Phone, Vehicle, and Notes.\n\n" +
-    "Proceed?",
-    ui.ButtonSet.YES_NO
-  );
-
-  if (confirm !== ui.Button.YES) return;
 
   try {
     const result = createPublicTransportationWorkbook(targetSs);
-    ui.alert("Sheet Created Successfully!", result.message, ui.ButtonSet.OK);
+    const title = result.reusedExisting ? "Existing Public Sheet Synced!" : "Public Sheet Created & Linked!";
+    ui.alert(title, result.message, ui.ButtonSet.OK);
   } catch (err) {
-    ui.alert("Error Creating Sheet", err.message, ui.ButtonSet.OK);
+    ui.alert("Error", err.message, ui.ButtonSet.OK);
   }
 }
 
 /**
- * UI Menu: Enable Public Transportation for Event (by Sheet URL)
- * Allows coordinators to selectively opt-in any existing or prior event response sheet.
+ * Backwards-compatible alias for `generatePublicTransportationSheetMenu`.
  */
 function enablePublicTransportationForSheetUrlMenu() {
-  const ui = SpreadsheetApp.getUi();
-  const prompt = ui.prompt(
-    "Enable Public Transportation (by Sheet URL)",
-    "Enter the Google Sheet URL of the event response spreadsheet to enable volunteer driver signups for:",
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (prompt.getSelectedButton() !== ui.Button.OK) return;
-  const url = prompt.getResponseText().trim();
-  if (!url) return;
-
-  let targetSs;
-  try {
-    targetSs = SpreadsheetApp.openByUrl(url);
-  } catch (err) {
-    ui.alert("Error", "Could not open spreadsheet. Please check the URL and permissions: " + err.message, ui.ButtonSet.OK);
-    return;
-  }
-
-  try {
-    const result = createPublicTransportationWorkbook(targetSs);
-    ui.alert("Success!", `Public Driver Signup sheet created and linked for "${targetSs.getName()}" in folder "${result.folderName}".\n\nPublic Sheet URL:\n${result.sheetUrl}`, ui.ButtonSet.OK);
-  } catch (err) {
-    ui.alert("Error", "Failed to setup public transportation: " + err.message, ui.ButtonSet.OK);
-  }
+  generatePublicTransportationSheetMenu();
 }
 
 /**
