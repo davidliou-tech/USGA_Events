@@ -910,6 +910,9 @@
           <a href="${response.editUrl}" target="_blank">Edit Form</a><br>
           <a href="${response.sheetUrl}" target="_blank">View Response Sheet</a>
         `;
+        if (response.publicTransportUrl) {
+          linksHtml += `<br><a href="${response.publicTransportUrl}" target="_blank">🚗 View Public Driver Signup Sheet</a>`;
+        }
         if (response.folderUrl) {
           linksHtml += `<br><a href="${response.folderUrl}" target="_blank">📁 View Event Drive Folder</a>`;
         }

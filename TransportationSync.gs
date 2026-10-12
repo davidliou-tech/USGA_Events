@@ -1254,8 +1254,9 @@ function createPublicTransportationWorkbook(masterSs) {
     Logger.log("Could not auto-install transportation sync trigger: " + trigErr.message);
   }
 
-  // Execute initial Push Sync
+  // Execute initial Push Sync and initialize Driver Roster tab
   pushTransportationToPublic(masterSs, newSs, {});
+  generateDriverSummaryRoster(masterSs);
 
   return {
     success: true,

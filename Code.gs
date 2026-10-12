@@ -1999,6 +1999,21 @@ function generateForm(payload) { try {
     }
   }
   
+  // Automatically create and link the Public Driver Signup Workbook in the event folder
+  let publicTransportUrl = "";
+  let publicTransportId = "";
+  if (typeof createPublicTransportationWorkbook === "function") {
+    try {
+      const pubRes = createPublicTransportationWorkbook(responseSs);
+      if (pubRes && pubRes.sheetUrl) {
+        publicTransportUrl = pubRes.sheetUrl;
+        publicTransportId = pubRes.sheetId || "";
+      }
+    } catch (pubErr) {
+      Logger.log("Notice: Could not auto-create Public Transportation Workbook during form generation: " + pubErr.message);
+    }
+  }
+  
   const genLock = LockService.getScriptLock();
   genLock.waitLock(30000);
   try {
@@ -2031,7 +2046,9 @@ function generateForm(payload) { try {
       isZh: isZh,
       publishedUrl: form.getPublishedUrl(),
       editUrl: form.getEditUrl(),
-      sheetUrl: responseSs.getUrl()
+      sheetUrl: responseSs.getUrl(),
+      publicTransportSheetId: publicTransportId,
+      publicTransportSheetUrl: publicTransportUrl
     };
     props.setProperty('FormsToMonitor', JSON.stringify(monitor));
       
@@ -2087,7 +2104,8 @@ function generateForm(payload) { try {
     editUrl: form.getEditUrl(),
     sheetUrl: responseSs.getUrl(),
     publishedUrl: form.getPublishedUrl(),
-    folderUrl: targetFolder ? targetFolder.getUrl() : ""
+    folderUrl: targetFolder ? targetFolder.getUrl() : "",
+    publicTransportUrl: publicTransportUrl
   };
   } catch (err) {
     throw new Error(err.message + "\nStack: " + err.stack);
