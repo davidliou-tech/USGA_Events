@@ -3094,12 +3094,24 @@ function masterRespondToRegistration(e) {
         }
       }
 
-      // Automatically sync with Public Transport Sheet if configured
+      // Automatically sync with Public Transport Sheet if configured (Option C: Transit-filtered fast-path)
       try {
         if (typeof getTransportationSettings === "function" && typeof syncTransportation === "function") {
-          const tSettings = getTransportationSettings(responseSs);
-          if (tSettings && tSettings.publicTransportSheetId) {
-            syncTransportation(responseSs);
+          const isFlightArr = arrDetails && arrDetails.toLowerCase().includes("flight");
+          const isTrainArr = arrDetails && (arrDetails.toLowerCase().includes("train") || arrDetails.toLowerCase().includes("bus"));
+          const isFlightDep = depDetails && depDetails.toLowerCase().includes("flight");
+          const isTrainDep = depDetails && (depDetails.toLowerCase().includes("train") || depDetails.toLowerCase().includes("bus"));
+          const needsTransport = isFlightArr || isTrainArr || isFlightDep || isTrainDep;
+
+          if (needsTransport) {
+            const tSettings = getTransportationSettings(responseSs);
+            if (tSettings && tSettings.publicTransportSheetId) {
+              syncTransportation(responseSs, {
+                isLightweight: true,
+                lockTimeoutMs: 3000,
+                failSilentlyOnLock: true
+              });
+            }
           }
         }
       } catch (tErr) {

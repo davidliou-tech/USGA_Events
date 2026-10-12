@@ -9,7 +9,8 @@
  * 1. ZERO ATTENDEE PII on Public Sheet: Attendee phone numbers and emails are never exposed publicly.
  *    Names are masked (e.g. "David L.", "Grace C.").
  * 2. Deterministic Trip Sub-IDs: Format `[TYPE]-[HUB]-[CARRIER]-[MMDD]-[HHMM]-[SLOT]` prevents row desyncs.
- * 3. Family & Minor Protection: Families sharing emails/guardians are never split across vehicles.
+ * 3. Family Protection: Passengers detected as one family (same email, or same last name + phone, same date/hub)
+ *    are packed as one unit and never split across vehicles. Families over the car limit ride together in one flagged slot.
  * 4. Arrival Window Clustering: Configurable time window (default 30 min) clusters nearby arrivals at the same hub.
  * 5. Manual Host Church Communications: Zero automated emails sent to volunteers/attendees.
  *    Generates copy-ready, formatted SMS/WhatsApp dispatch messages directly in Master sheet for coordinators.
@@ -382,6 +383,7 @@ function clusterAndChunkTransportation(data, travelType, maxPerCar, windowMinute
     return a[0].normTime.minutes - b[0].normTime.minutes;
   });
 
+  // Each run keeps its family clusters as indivisible units (array of clusters).
   const transitRuns = [];
   const clusterUsed = new Set();
 
@@ -389,7 +391,7 @@ function clusterAndChunkTransportation(data, travelType, maxPerCar, windowMinute
     if (clusterUsed.has(i)) continue;
     const baseCluster = familyClusters[i];
     const baseP = baseCluster[0];
-    const runMembers = [...baseCluster];
+    const runClusters = [baseCluster];
     clusterUsed.add(i);
 
     // Check subsequent clusters for window matching
@@ -410,35 +412,41 @@ function clusterAndChunkTransportation(data, travelType, maxPerCar, windowMinute
       }
 
       if (sameDate && sameHub && withinWindow) {
-        runMembers.push(...candidateCluster);
+        runClusters.push(candidateCluster);
         clusterUsed.add(j);
       }
     }
 
-    transitRuns.push(runMembers);
+    transitRuns.push(runClusters);
   }
 
   // Step 4: Chunk each Transit Run into vehicle slots (Max capacity: maxPerCar)
   const vehicleSlots = [];
 
-  transitRuns.forEach(runPassengers => {
-    const totalPassengers = runPassengers.length;
-    const numSlotsNeeded = Math.max(1, Math.ceil(totalPassengers / maxPerCar));
+  transitRuns.forEach(runClusters => {
+    const runPassengers = [].concat(...runClusters);
 
-    // Distribute passengers into slots while keeping families together
-    const slots = [];
-    for (let s = 0; s < numSlotsNeeded; s++) {
-      slots.push([]);
-    }
-
-    // Bin-packing: place passengers into available slots
-    let currentSlot = 0;
-    runPassengers.forEach(p => {
-      if (slots[currentSlot].length >= maxPerCar && currentSlot < numSlotsNeeded - 1) {
-        currentSlot++;
-      }
-      slots[currentSlot].push(p);
+    // First-fit-decreasing bin packing on whole family clusters, so a family is never split.
+    // Ties are broken by name to keep slot assignment deterministic between syncs.
+    const ordered = runClusters.slice().sort((a, b) => {
+      if (b.length !== a.length) return b.length - a.length;
+      const ka = ((a[0].last || "") + "|" + (a[0].first || "")).toLowerCase();
+      const kb = ((b[0].last || "") + "|" + (b[0].first || "")).toLowerCase();
+      return ka.localeCompare(kb);
     });
+
+    const slots = [];
+    ordered.forEach(cluster => {
+      // A family larger than maxPerCar cannot fit a standard car; it still rides together in one slot.
+      let target = slots.find(s => s.length + cluster.length <= maxPerCar);
+      if (!target) {
+        target = [];
+        slots.push(target);
+      }
+      cluster.forEach(p => target.push(p));
+    });
+
+    const numSlotsNeeded = Math.max(1, slots.length);
 
     // Consolidate slot metadata
     const firstP = runPassengers[0];
@@ -469,7 +477,10 @@ function clusterAndChunkTransportation(data, travelType, maxPerCar, windowMinute
       const maskedNamesList = slotPassengers.map(p => p.maskedName).join(", ");
       const maskedSummary = `${slotPassengers.length} Pass: ${maskedNamesList}`;
       const luggageCount = slotPassengers.length; // Default estimate 1-2 bags per person
-      const luggageSummary = `🧳 ~${luggageCount} Checked Bags`;
+      let luggageSummary = `🧳 ~${luggageCount} Checked Bags`;
+      if (slotPassengers.length > maxPerCar) {
+        luggageSummary += ` | 🚐 Large group of ${slotPassengers.length} (van needed)`;
+      }
 
       vehicleSlots.push({
         tripSubId: subId,
@@ -764,6 +775,7 @@ function pullDriversFromPublic(publicSs, masterSs) {
  * @returns {Object} Report of pushed slots.
  */
 function pushTransportationToPublic(masterSs, publicSs, options) {
+  options = options || {};
   const config = getTransportationSettings(masterSs);
   const report = { pickupSlots: 0, dropoffSlots: 0, preservedClaims: 0 };
 
@@ -892,8 +904,10 @@ function pushTransportationToPublic(masterSs, publicSs, options) {
       });
     });
 
-    // Reapply protected ranges to Public sheet
-    applyPublicSheetProtections(pubSheet);
+    // Reapply protected ranges to Public sheet (skip in lightweight mode to avoid remote API latency on form submission)
+    if (!options.isLightweight && !options.skipProtections) {
+      applyPublicSheetProtections(pubSheet);
+    }
   });
 
   return report;
@@ -906,13 +920,23 @@ function pushTransportationToPublic(masterSs, publicSs, options) {
  * Wrapped in LockService to prevent concurrent collisions.
  * 
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} masterSs
+ * @param {Object} [options]
+ * @param {boolean} [options.isLightweight=false] - If true, skips sheet protection rebuild and driver roster recalculation.
+ * @param {number} [options.lockTimeoutMs=30000] - Lock timeout duration in milliseconds.
+ * @param {boolean} [options.failSilentlyOnLock=false] - If true, logs warning and returns without throwing if lock is held.
  * @returns {Object} Comprehensive sync summary.
  */
-function syncTransportation(masterSs) {
+function syncTransportation(masterSs, options) {
+  options = options || {};
   if (!masterSs) throw new Error("No active Master Spreadsheet provided.");
 
+  const timeoutMs = typeof options.lockTimeoutMs === "number" ? options.lockTimeoutMs : 30000;
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
+  if (!lock.tryLock(timeoutMs)) {
+    if (options.failSilentlyOnLock) {
+      Logger.log(`syncTransportation: Script lock timed out after ${timeoutMs}ms. Deferring live sync to background trigger.`);
+      return { success: false, skipped: true, reason: `Lock acquisition timed out after ${timeoutMs}ms` };
+    }
     throw new Error("Another transportation sync is currently in progress. Please wait 30 seconds and retry.");
   }
 
@@ -933,10 +957,12 @@ function syncTransportation(masterSs) {
     const pullReport = pullDriversFromPublic(publicSs, masterSs);
 
     // Step 2: Push Master -> Public
-    const pushReport = pushTransportationToPublic(masterSs, publicSs, {});
+    const pushReport = pushTransportationToPublic(masterSs, publicSs, options);
 
-    // Step 3: Refresh Master Driver Summary Roster
-    generateDriverSummaryRoster(masterSs);
+    // Step 3: Refresh Master Driver Summary Roster (skip in lightweight mode)
+    if (!options.isLightweight && !options.skipRoster) {
+      generateDriverSummaryRoster(masterSs);
+    }
 
     return {
       success: true,
@@ -1374,7 +1400,17 @@ function installTransportationSyncTrigger(masterSs) {
     .everyMinutes(15)
     .create();
 
-  return { success: true, message: "Automated 15-minute background transportation sync trigger installed." };
+  // Time-driven triggers have no active spreadsheet, so register the event sheet explicitly.
+  if (masterSs) {
+    const props = PropertiesService.getScriptProperties();
+    const trackedIds = JSON.parse(props.getProperty("PublicTransportEventSheetIds") || "[]");
+    if (!trackedIds.includes(masterSs.getId())) {
+      trackedIds.push(masterSs.getId());
+      props.setProperty("PublicTransportEventSheetIds", JSON.stringify(trackedIds));
+    }
+  }
+
+  return { success: true, message: "Automated 15-minute background transportation sync trigger installed (covers every event with a public driver sheet)." };
 }
 
 /**

@@ -36,8 +36,8 @@ This document provides a complete, unified historical record of all versions, fe
   - Introduced canonical reference IDs formatted as `[TYPE]-[HUB]-[IDENTIFIER]-[MMDD]-[HHMM]-[SLOT]` (e.g., `PU-SFO-UA1234-1025-1430-A`).
   - Completely eliminates the classic Google Sheets row-shift / formula-desync bug where sorting or filtering misaligns driver names from passenger flights.
 - **Family & Minor Co-location Protection**:
-  - Leverages the multi-child composite resolution engine to cluster siblings and family members sharing emails or parent/guardian contacts as indivisible atomic units.
-  - Guarantees parents and minors are never split across different vehicle runs.
+  - Passengers detected as one family (same email, or same last name + phone, on the same date and hub) are treated as one unit and packed into vehicles with first-fit-decreasing, so they are never split.
+  - Limits: grouping relies on shared email or last name + phone, so relatives registered with different contact details are not recognized as a family. A family larger than `MaxPassengersPerCar` stays together in one slot, flagged `Large group (van needed)`, rather than being split. If new registrations change the packing, slot letters can shift, so recheck claimed slots after late changes.
 - **Arrival/Departure Window Clustering**:
   - Implemented configurable time-window clustering (`ArrivalClusterWindowMinutes`, default: 30 minutes) to combine flights landing closely at the same airport into a unified airport pickup run, optimizing volunteer driver trips.
 - **Manual Host Church Communication Tooling**:
@@ -53,7 +53,7 @@ This document provides a complete, unified historical record of all versions, fe
 - **Dedicated Driver Roster & Concurrency Safety**:
   - **Driver Summary Roster**: Adds an automated `Driver Roster` tab in Master grouping all assignments chronologically by volunteer driver.
   - **Zero-Touch Auto-Sync Activation (`ensureTransportationSyncTrigger` & `backgroundTransportationSync`)**: Creating a Public Driver Signup Sheet automatically installs/verifies the 15-minute background trigger and registers the event in `PublicTransportEventSheetIds` (alongside `FormsToMonitor`), ensuring hands-free bidirectional synchronization without requiring manual trigger setup.
-  - **LockService Concurrency**: Prevents race conditions during simultaneous public edits using script-level locking and atomic batch writing.
+  - **LockService Concurrency & Form Submission Fast-Path**: Prevents race conditions during simultaneous public edits using script-level locking and atomic batch writing. During form submissions (`masterRespondToRegistration`), automatically filters for transit attendees and executes an ultra-fast lightweight sync (bypassing redundant range protection calls and driver roster recalculation with a 3-second lock timeout and fail-silent fallback to the 15-minute background cron), completely eliminating confirmation email latency during registration surges.
 - **Active Events Sidebar Integration**:
   - Added a dedicated **🚗 Transportation & Drivers** card inside `ManageEventsSidebar.html` with real-time status display and one-click sync / setup buttons.
 

@@ -1,6 +1,7 @@
 # Technical Deployment Walkthrough
 
 ## Core Components
+* **TransportationSync.gs [V2.9.5]:** Dual-sheet transportation engine: Trip Sub-ID generation, family-safe vehicle chunking with time-window clustering, public driver sheet provisioning/protection, bidirectional Push/Pull sync, dispatch-text generation, and the `Driver Roster` tab. Listed in `.claspignore` as `!TransportationSync.gs`.
 * **Code.gs:** The backend logic for parsing dictionaries, injecting Google Form items, building HTML emails, handling triggers, running strict authentication checks for alias emails, managing cron lifecycle properties, and operating modular sheet builders.
 * **sidebar.html:** The frontend UI controller that manages form generation state, dynamic dropdowns, live search/filtering, category batch toggling, and animated generation progress tracking.
 * **ManageEventsSidebar.html:** The frontend UI controller for the Active Events Management tool. Displays live event status (Open/Closed/Scheduled), capacity metrics, direct navigation links, manual open/close controls, and trigger-safe event archival.
@@ -50,6 +51,7 @@ When an attendee submits or edits a response:
 * **Composite Key Participant Matching [V2.9]:** Rows in `Pickup`, `Drop-Off`, and `Logistics` are matched on `(First Name + Last Name + Email)`. Siblings sharing a parent's email address each receive their own individual row, completely eliminating multi-child registration overwrites.
 * **Waitlist Calculation Precision [V2.9]:** The participant counter scans prior submissions and actively excludes rows where Medical Consent is "No" or where status is "Rejected" or "Waitlisted". Existing confirmed spots are permanently preserved upon registration edits.
 * **Chronological Transportation Sorting [V2.9]:** `Pickup` and `Drop-Off` sheets sort chronologically by **Date then Time first** (`[Date, Time, Flight/Train]`), followed by driver assignments. Volunteer driver names entered manually in the driver columns stay perfectly aligned with passenger rows.
+* **Opt-In Public Transport Sync [V2.9.5]:** After the Lodging sync, `masterRespondToRegistration` checks if the registrant requires airport/transit transport (`isFlightArr || isTrainArr || isFlightDep || isTrainDep`). If so and `Settings` contains `PublicTransportSheetId`, it runs a fast-path lightweight sync (`isLightweight: true`, skipping sheet protection rebuilds and driver roster recalculation, with a 3s lock timeout and graceful fail-silent fallback). Events without transit requests or without a public sheet bypass sync entirely, ensuring attendee confirmation emails are never delayed.
 * **Email Delivery Error Logging [V2.9]:** If email delivery fails via `GmailApp` and fallback `MailApp`, the specific error is logged directly into the `Email Status` column (`Delivery Failed: ...`), alerting coordinators immediately.
 * **Summary Dashboard Formula Accuracy [V2.9]:**
   * Demographics uses prefix matching (`"Male*"`, `"Female*"`) to prevent females from being counted under Males.
@@ -57,6 +59,18 @@ When an attendee submits or edits a response:
   * Church lodging uses dual-mode matching (`cLodgingMatch`) supporting both standard headers (`I will be staying*` with `"Yes*"`/`"No*"` prefix matching) and legacy headers (`Lodging Arrangement*` / `住宿安排` with `"*host church*"` / `"*self*"` matching), preventing zero-counts on historical or bilingual forms.
   * Dietary and special needs queries use unbounded ranges (`A2:ZZ`) with multilingual "None" exclusions (`<>無`, `<>没有`).
   * Airport Summary queries sort airport passenger volumes descending (`ORDER BY COUNT(...) DESC`).
+
+### 6a. Dual-Sheet Transportation Sync (`TransportationSync.gs`) [V2.9.5]
+* **Master schema:** `setupTransportationSheets` now creates 22 columns on `Pickup`/`Drop-Off`: cols 18–22 are `Trip Sub-ID` (plain text), `Vehicle Slot`, `Driver Vehicle / Notes`, `Coordinator Status` (data-validation dropdown), `One-Click Dispatch SMS Text`. `ensureTransportationHeaders()` appends any missing columns to existing sheets without touching data.
+* **Trip Sub-ID:** `generateTripSubId()` → `[PU|DO]-[HUB]-[CARRIER]-[MMDD]-[HHMM]-[SLOT]`, used as the join key between workbooks so sorting never misaligns drivers.
+* **Clustering (`clusterAndChunkTransportation`):** Active rows only (`CANCELLED` excluded) → family clusters (same date/hub and shared email, or same last name + phone) → time-window runs (`ArrivalClusterWindowMinutes` / `DepartureClusterWindowMinutes`, default 30; `0` = same carrier/flight only) → first-fit-decreasing packing of whole family clusters into cars of `MaxPassengersPerCar` (default 4), ties broken by name. A family is never split; one larger than the cap gets its own slot, flagged `Large group (van needed)`. Slot letters can shift when late registrations change the packing.
+* **Push (`pushTransportationToPublic`):** Reads existing claims from the public sheet by Trip Sub-ID, rebuilds the full matrix in memory, clears and rewrites rows 3+ in one `setValues()`, reapplies protection (skipped during lightweight push), and writes Sub-ID/Slot/SMS text back to Master. **Pull (`pullDriversFromPublic`):** Copies driver name/phone/vehicle/notes into Master by Trip Sub-ID and sets `Coordinator Status` to `Driver Claimed` if blank/`Unassigned`.
+* **Orchestration:** `syncTransportation(masterSs, options)` takes `LockService.getScriptLock()` (30s default, 3s lightweight), runs Pull → Push → `generateDriverSummaryRoster()` (skipped during lightweight mode). Background cron (every 15 min) and manual sync perform full syncs with roster generation and protection enforcement.
+* **Public workbook:** `createPublicTransportationWorkbook()` creates the file, moves it to the Master's folder, sets sharing to ANYONE_WITH_LINK/EDIT, builds `Instructions`, `Pickup Signups`, `Drop-Off Signups`, saves `PublicTransportSheetId`/`PublicTransportSheetUrl` to `Settings`, and runs the first push. `applyPublicSheetProtections()` locks the sheet except Cols H–K (rows 3+). Sheet-level protection stops casual edits; it is not a security boundary against someone who holds the edit link.
+* **No outbound mail:** The module makes no `GmailApp`/`MailApp` calls. Coordinators copy the generated dispatch text manually.
+* **Settings keys (optional rows on `Settings`):** `PublicTransportSheetId`, `PublicTransportSheetUrl`, `MaxPassengersPerCar`, `ArrivalClusterWindowMinutes`, `DepartureClusterWindowMinutes`, `CoordinatorName`, `CoordinatorPhone` (alias `HostChurchContact`).
+* **Sidebar endpoints:** `getTransportationStatusByFormId`, `syncTransportationByFormId`, `generatePublicTransportationByFormId`, used by the 🚗 card in `ManageEventsSidebar.html`.
+* **Phone safety:** Public-sheet phone/Sub-ID columns are set to `@` and values beginning with `+`, `-`, `=` are apostrophe-prefixed (`formatTransportPhone`).
 
 ---
 
@@ -130,6 +144,14 @@ Located under **USGA Events > Advanced Maintenance**:
 5. **Configure Delegated Web App URL:**
    * **Backend Function:** `configureDelegatedWebApp()`
    * **Purpose:** Opens a prompt allowing the administrator to store or update the internal Web App URL in `ScriptProperties` under `DELEGATED_WEB_APP_URL`.
+6. **Setup / Sync Public Transportation for Event (by URL) [V2.9.5]:**
+   * **Backend Function:** `enablePublicTransportationForSheetUrlMenu()`
+   * **Purpose:** Opts a specific existing event response spreadsheet into the dual-sheet transportation system.
+   * **Behavior:** Opens the sheet by URL, creates and links the public driver sheet, adds missing columns 18–22 to `Pickup`/`Drop-Off`, and runs the first sync. Existing columns and driver entries are preserved. Also available under **USGA Events > Transportation & Drivers**.
+
+### 8.3a Transportation & Drivers Menu [V2.9.5]
+**USGA Events > Transportation & Drivers** (run from inside an event response spreadsheet): `Generate Public Driver Signup Sheet (Active Sheet)` (`generatePublicTransportationSheetMenu`), `Enable Public Transportation for Event (by Sheet URL)`, `Sync Transportation & Drivers Now` (`syncPublicTransportationMenu`), `Generate Driver Summary Roster` (`generateDriverSummaryRosterMenu`), and `Install Auto-Sync Trigger (15 Mins)` (`installTransportationTriggerMenu`).
+* **Trigger note:** The 15-minute trigger (`backgroundTransportationSync`) is a single project-wide trigger that counts once against the 20-trigger quota (see 8.4). Time-driven triggers have no active spreadsheet, so it loops over events in `FormsToMonitor` and sheet IDs saved in the `PublicTransportEventSheetIds` script property, syncing each one that has a `PublicTransportSheetId`. It is installed automatically when a public sheet is created, and the menu item re-creates it and registers the current event.
 
 ### 8.4 Trigger Quota Management & Automated Lifecycle
 * **Apps Script Trigger Limit:** Google Workspace enforces a strict quota of **20 installable triggers per user/project**.

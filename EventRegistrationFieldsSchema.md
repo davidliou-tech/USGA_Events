@@ -94,7 +94,7 @@ graph TD
 
 ## 4. Downstream Spreadsheet Architecture
 
-Each generated form links to a dedicated Google Sheet structured into seven modular tabs:
+Each generated form links to a dedicated Google Sheet structured into modular tabs (plus the optional `Driver Roster` tab and a separate public driver workbook, see below):
 
 ### 1. `Form Responses 1`
 Raw, immutable responses recorded directly by Google Forms.
@@ -104,7 +104,7 @@ Raw, immutable responses recorded directly by Google Forms.
 * **Header:** Summary counter displaying `="Total Participants: " & IF(A2="No responses yet", 0, COUNTA(A2:A))`.
 
 ### 3. `Pickup`
-* **Columns (17):**
+* **Columns (22) [V2.9.5; legacy sheets have 17 until synced]:**
   1. `First Name`
   2. `Last Name`
   3. `Email`
@@ -120,13 +120,19 @@ Raw, immutable responses recorded directly by Google Forms.
   13. `Arrival Carrier`
   14. `Arrival Train/Bus Number`
   15. `Status`
-  16. `Driver Full Name` *(Manual volunteer entry)*
-  17. `Driver Phone Number` *(Manual volunteer entry)*
+  16. `Driver Full Name` *(Manual entry or synced from public sheet)*
+  17. `Driver Phone Number` *(Manual entry or synced from public sheet; plain text)*
+  18. `Trip Sub-ID` *(System; plain text)*
+  19. `Vehicle Slot` *(System)*
+  20. `Driver Vehicle / Notes` *(Synced from public sheet)*
+  21. `Coordinator Status` *(Dropdown: Unassigned, Driver Claimed, Confirmed / Contacted, Reassign Needed, Completed)*
+  22. `One-Click Dispatch SMS Text` *(System-generated copy-ready message)*
 * **Sorting:** Automatically sorted chronologically by **Date (Col 6), Time (Col 7), Flight/Airport (Col 9)**.
 * **Matching:** Evaluated on composite key `(First Name + Last Name + Email)`.
+* **Trip Sub-ID format:** `[TYPE]-[HUB]-[CARRIER]-[MMDD]-[HHMM]-[SLOT]`, e.g. `PU-SFO-UA1234-1025-1430-A` (`WIN` replaces the carrier for multi-flight window runs).
 
 ### 4. `Drop-Off`
-* **Columns (17):**
+* **Columns (22) [V2.9.5]:** Columns 1–17 as below, plus columns 18–22 identical to `Pickup` (`Trip Sub-ID`, `Vehicle Slot`, `Driver Vehicle / Notes`, `Coordinator Status`, `One-Click Dispatch SMS Text`) with `DO-` Sub-IDs.
   1. `First Name`
   2. `Last Name`
   3. `Email`
@@ -158,3 +164,11 @@ Raw, immutable responses recorded directly by Google Forms.
 
 ### 7. `Airport Summary`
 * Dynamically aggregates inbound and outbound passenger volumes by airport code, sorted in descending order (`ORDER BY COUNT(...) DESC`).
+
+### 8. `Driver Roster` *(optional, created by transportation sync [V2.9.5])*
+* **Columns:** `Driver Full Name`, `Driver Phone`, `Assigned Runs Count`, `Total Passengers`, `Vehicles / Notes`, `Upcoming Schedule Summary`. Rebuilt on every sync.
+
+### Public Driver Signup Workbook *(separate file, optional [V2.9.5])*
+* Linked from `Settings` via `PublicTransportSheetId` / `PublicTransportSheetUrl`. Contains `Instructions`, `Pickup Signups`, and `Drop-Off Signups`. Contains no attendee phone numbers or emails; passenger names are masked (`First L.`).
+* **Columns (A–L), one row per vehicle slot:** `Trip Sub-ID`, `Date & Time`, `Airport / Station`, `Flight / Carrier`, `Vehicle Slot`, `Passengers`, `Luggage & Needs`, **`Driver Full Name`**, **`Driver Phone Number`**, **`Vehicle Model / Seats`**, **`Driver Notes`** (H–K editable), `Status` (`🟢 OPEN` / `🟡 CLAIMED`). Rows 1–2 are banner and headers.
+* **`Settings` keys (optional):** `MaxPassengersPerCar`, `ArrivalClusterWindowMinutes`, `DepartureClusterWindowMinutes`, `CoordinatorName`, `CoordinatorPhone`.

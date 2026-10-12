@@ -15,8 +15,9 @@ Your event spreadsheet contains several specialized tabs. Each tab serves a dedi
 | **`Room Inventory`** | **Facility & Sleeping Arrangements Planner:** Enter your building names, room names, gender designations, and max capacities. Automatically tracks assigned occupants and remaining capacity. | Host Church Lodging Coordinator |
 | **`Lodging`** | **Dedicated Church Lodging Roster:** Filtered to *only* participants staying at the host church. Contains sleep habits, lodging dates, bedding requests, and room assignment dropdowns. | Host Church Lodging Team |
 | **`Logistics`** | **General On-Site Roster & Grouping:** Master list of all attendees for event check-in, dietary restrictions, special needs, emergency contacts, and discussion `Group/Team` assignments. | General Coordinator, Food / Kitchen Team, Program Leads |
-| **`Pickup`** | **Inbound Airport & Transit Roster:** Flight, train, and bus arrivals sorted chronologically by date/time. Assign volunteer drivers directly in the sheet. | Transportation Team / Shuttle Drivers |
-| **`Drop-Off`** | **Outbound Airport & Transit Roster:** Outbound travel details sorted chronologically. Assign volunteer return drivers. | Transportation Team / Shuttle Drivers |
+| **`Pickup`** | **Inbound Airport & Transit Roster (private):** Flight, train, and bus arrivals sorted chronologically. Shows driver claims synced from the public signup sheet, a `Coordinator Status` dropdown, and a copy-ready dispatch text per run. | Transportation Coordinator |
+| **`Drop-Off`** | **Outbound Airport & Transit Roster (private):** Same layout as `Pickup` for departures. | Transportation Coordinator |
+| **`Driver Roster`** | **Volunteer Driver Summary:** Created by the transportation sync. Groups every run by driver name, with phone, run count, passenger count, and schedule. | Transportation Coordinator |
 | **`Summary Dashboard`** | **Real-Time Event Statistics:** Instant counts of total registrants, meal counts, dietary restrictions, airport shuttle volumes, and room capacity vs. assigned occupants. | Lead Event Coordinators & Pastors |
 | **`Airport Summary`** | **Airport Breakdown:** Counts arrivals and departures grouped by airport code to plan large van/bus shuttle runs. | Transportation Team |
 | **`Participants`** | **Public Attendee List:** Simple roster of registered participants (safe to publish to web so members know who is attending). | Registrants / Public |
@@ -112,15 +113,49 @@ The **`Logistics`** tab is the general roster for on-site registration check-in,
 
 ## 4. Airport & Transit Logistics: `Pickup` and `Drop-Off` Sheets
 
-The **`Pickup`** and **`Drop-Off`** tabs organize arrival and departure travel details for participants flying or taking trains/buses.
+The **`Pickup`** and **`Drop-Off`** tabs organize arrival and departure travel details for participants flying or taking trains/buses. These tabs contain full attendee contact info and must stay **private** to the coordination team.
 
 ### Key Behaviors:
 * **Chronological Sorting:** Rows are automatically sorted chronologically by **Date then Time**, grouping attendees who arrive on the same flight or around the same time together.
 * **Flight/Train Details:** Lists date, time, airport/station, airline, flight number, carrier, and transit status (`Active`, `Updated`, `CANCELLED`).
-* **Assigning Volunteer Drivers:**
-  * Enter the driver's name in **`Driver Full Name`** and their mobile number in **`Driver Phone Number`**.
-  * Driver assignments stay permanently linked to the passenger, even when new registrations arrive and the list re-sorts.
 * **Phone Number Formatting:** International numbers (e.g., `+1...`, `+54...`) are automatically formatted as Plain Text to prevent `#ERROR!` spreadsheet formula errors.
+
+### Transportation Columns (V2.9.5)
+Columns 16–22 on both tabs:
+
+| Col | Header | Filled By |
+| :--- | :--- | :--- |
+| 16 | `Driver Full Name` | Synced from the public signup sheet (or typed manually) |
+| 17 | `Driver Phone Number` | Synced from the public signup sheet (or typed manually) |
+| 18 | `Trip Sub-ID` | System, e.g. `PU-SFO-UA1234-1025-1430-A`. Links each passenger to a vehicle slot. Do not edit. |
+| 19 | `Vehicle Slot` | System, e.g. `Car 1 of 2 (Slot A)` |
+| 20 | `Driver Vehicle / Notes` | Synced from the public sheet (vehicle model + driver notes) |
+| 21 | `Coordinator Status` | **You** (dropdown): `Unassigned`, `Driver Claimed`, `Confirmed / Contacted`, `Reassign Needed`, `Completed` |
+| 22 | `One-Click Dispatch SMS Text` | System. Copy-ready message with passenger names/phones, flight, and luggage estimate |
+
+### Public Driver Signup Sheet (Optional, V2.9.5)
+To let congregation volunteers claim rides without seeing attendee contact info, generate a separate public sheet:
+
+1. **Create it:** **USGA Events > Manage Active Events** > select event > **🚗 Transportation & Drivers** > **📋 Setup Public Sheet**. (Or **USGA Events > Transportation & Drivers > Generate Public Driver Signup Sheet**.)
+2. **What volunteers see:** One row per vehicle slot with date/time, airport, flight, and masked passenger names (e.g., `David L.`). **No phone numbers or emails.** Large arrivals are split into cars of up to 4 passengers; families sharing an email are kept together; flights landing within 30 minutes at the same airport are combined into one run.
+3. **What volunteers can edit:** Only `Driver Full Name`, `Driver Phone Number`, `Vehicle Model / Seats`, and `Driver Notes` (Columns H–K). Everything else is protected.
+4. **Sync:** Click **Sync Drivers** in the sidebar (or **USGA Events > Transportation & Drivers > Sync Transportation & Drivers Now**). Sync also runs on each new registration or edit, and optionally every 15 minutes via **Install Auto-Sync Trigger**. Claims are matched by `Trip Sub-ID`, so sorting either sheet is safe.
+5. **Optional Settings tab entries** (add rows to `Settings` as `Setting | Value`): `MaxPassengersPerCar` (default 4), `ArrivalClusterWindowMinutes` and `DepartureClusterWindowMinutes` (default 30; `0` = one run per flight), `CoordinatorName`, `CoordinatorPhone` (included in dispatch texts).
+
+### Contacting Drivers (Manual, No Automatic Emails)
+The system **never emails or texts drivers or passengers about assignments**. Your team stays in control:
+1. Review the claim on `Pickup` / `Drop-Off` (check vehicle size vs. passengers and luggage).
+2. Click the cell in **`One-Click Dispatch SMS Text`**, copy it, and paste into your own text, WhatsApp, LINE, or WeChat message to the driver.
+3. Set **`Coordinator Status`** to `Confirmed / Contacted`.
+4. If a driver cannot do it, set `Reassign Needed` and clear their name on the **public** sheet so the slot reopens.
+
+### Handling Changes
+* **Passenger cancels:** Row is marked `CANCELLED`; the public slot count shrinks, and an empty run drops off the public list on the next sync.
+* **Flight time changes:** The passenger moves to a new slot/Trip Sub-ID on the next sync. A driver who claimed the old slot is **not** moved automatically. Check `Driver Roster` and contact them.
+* **Two drivers type in the same slot:** The last entry on the public sheet is what syncs. Confirm with the driver before texting.
+
+> [!NOTE]
+> The public sheet is shared as *anyone with the link can edit*. Only post the link to trusted volunteer channels. The `Driver Roster` tab is generated on sync and lists each driver's runs.
 
 ---
 
@@ -144,11 +179,12 @@ The **`Summary Dashboard`** tab gives pastors, lead coordinators, and head chefs
 ## Golden Rules for Host Church Volunteers
 
 1. **Only Edit Yellow Columns (and Green Columns on Room Inventory):**
-   * **Yellow Headers:** Manual coordinator fields (`Room Assignment`, `Building`, `Bed / Spot`, `Lodging Notes`, `Group/Team`, `Driver Full Name`, `Driver Phone Number`).
+   * **Yellow Headers:** Manual coordinator fields (`Room Assignment`, `Building`, `Bed / Spot`, `Lodging Notes`, `Group/Team`, `Driver Full Name`, `Driver Phone Number`, `Coordinator Status`).
    * **Green Headers:** `Room Inventory` facility input fields (Columns A–E).
-   * **Blue Headers:** Automated fields populated by Google Forms. Do not type over blue headers.
+   * **Blue Headers:** Automated fields populated by Google Forms or the transportation sync (including `Trip Sub-ID`, `Vehicle Slot`, and `One-Click Dispatch SMS Text`). Do not type over blue headers.
 2. **Never Rename the Sheet Tabs:**
-   * Keep tab names as `Room Inventory`, `Lodging`, `Logistics`, `Pickup`, `Drop-Off`, `Summary Dashboard`, and `Form Responses 1` so automated sync scripts continue running seamlessly.
+   * Keep tab names as `Room Inventory`, `Lodging`, `Logistics`, `Pickup`, `Drop-Off`, `Driver Roster`, `Settings`, `Summary Dashboard`, and `Form Responses 1` so automated sync scripts continue running seamlessly. On the public driver sheet, keep `Pickup Signups` and `Drop-Off Signups` as named.
+   * Never share the master event spreadsheet with volunteer drivers. Share only the public driver signup sheet.
 3. **Never Delete Rows on `Form Responses 1`:**
    * If an attendee cancels, either change their status in the Form or mark them `CANCELLED` on the sheet. Deleting rows from `Form Responses 1` disrupts Google Forms row numbering.
 4. **Need to Re-Sync or Add Rooms?**

@@ -23,6 +23,7 @@ The USGA Event Registration System automates the setup and logistical tracking f
 * **Automated Drive Organization & Access:** The system automatically places your event files into a dedicated event folder within the official USGA Shared Drive and grants you Editor access.
 * **Live Event Monitoring & Capacity Management:** Use the **Manage Active Events** tool to view registration counts, monitor remaining spots, change deadlines, or manually open/close forms.
 * **Volunteer Driver & Rooming Worksheets:** Flight, train, and bus arrivals/departures are automatically grouped chronologically. You can assign volunteer drivers and room numbers directly in the spreadsheet without breaking automated sorting.
+* **Public Driver Signup Sheet (Optional, V2.9.5):** Generate a separate, privacy-safe Google Sheet where church volunteers claim airport rides. It shows masked passenger names only (no phone numbers or emails), splits large arrivals into cars of up to 4, keeps families together, and combines flights landing within 30 minutes. Claims sync back to your private `Pickup` / `Drop-Off` tabs.
 
 ---
 
@@ -84,7 +85,16 @@ When attendees register, their data automatically populates the specialized tabs
 
 * **Pickup & Drop-Off Sheets (Transportation):**
   * Inbound and outbound travel records are added automatically and sorted chronologically by **Date then Time**.
-  * **Assigning Drivers:** Enter volunteer driver names directly into the *Driver Full Name* and *Driver Phone Number* columns next to the passenger. Your driver assignments will stay securely linked to the passenger even as new attendees register and the list updates.
+  * **Assigning Drivers:** Enter volunteer driver names directly into the *Driver Full Name* and *Driver Phone Number* columns next to the passenger, or let volunteers claim rides on the public driver sheet (below). Assignments stay linked to the passenger even as new attendees register and the list updates.
+  * **V2.9.5 columns:** `Trip Sub-ID`, `Vehicle Slot`, `Driver Vehicle / Notes`, `Coordinator Status` (dropdown for your tracking), and `One-Click Dispatch SMS Text`.
+  * **Manual communication only:** The system does **not** send assignment emails or texts to drivers or passengers. Copy the dispatch text from the last column and send it yourself via SMS, WhatsApp, LINE, or WeChat, then mark the row `Confirmed / Contacted`.
+
+* **Public Driver Signup Sheet & Driver Roster (Optional):**
+  * In **Manage Active Events**, select the event and use the **🚗 Transportation & Drivers** card: **📋 Setup Public Sheet** creates the sheet (in the event's Drive folder) and **🔄 Sync Drivers** refreshes it. A link to the public sheet appears once created.
+  * Volunteers can edit only the driver name, phone, vehicle, and notes columns. Share only this link with volunteers, never the master spreadsheet.
+  * A **Driver Roster** tab groups each driver's runs, passengers, and phone for easy review.
+  * **Opt-in per event:** Nothing changes on existing or live events until you set up the public sheet for that event. To enable an older event, use **USGA Events > Transportation & Drivers > Enable Public Transportation for Event (by Sheet URL)**.
+  * Late flight changes or cancellations update the public sheet on the next sync, but drivers are not notified automatically, so check `Driver Roster` and contact them.
 
 * **Logistics Sheet (General Roster, Medical/Dietary & Group Assignments):**
   * Lists all participants for on-site registration check-in, dietary restrictions (`Food/Medicine Restrictions`), mobility needs, and parental/emergency contacts.
