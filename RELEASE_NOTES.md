@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.4 (Current) - Dedicated Lodging Sheet, Room Inventory & Host Church Room Import](#version-294)
+- [Version 2.9.5 (Current) - Dual-Sheet Transportation & Multi-Driver Sync Engine](#version-295)
+- [Version 2.9.4 - Dedicated Lodging Sheet, Room Inventory & Host Church Room Import](#version-294)
 - [Version 2.9.3 - Host Church Logistics, Lodging Standardization & International Phone Fix](#version-293)
 - [Version 2.9.2 - Maintenance & Lifecycle Optimization](#version-292)
 - [Version 2.9.1 - Active Events Performance & System Log Auto-Sync](#version-291)
@@ -19,6 +20,41 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-295"></a>
+## Version 2.9.5
+*October 2026*
+
+### Dual-Sheet Transportation & Multi-Driver Sync Engine (`TransportationSync.gs`)
+- **Strict Separation of Concerns & Zero Attendee PII**:
+  - Decoupled internal coordinator logistics from congregation volunteer signups via a physically separate **Public Driver Signup Workbook**.
+  - **Zero Contact PII**: Attendee phone numbers and emails are completely withheld from the public sheet.
+  - **Masked Passenger Names**: Displays masked names (e.g., `David L.`, `Grace C.`) alongside passenger counts to preserve attendee privacy while giving drivers necessary pickup identification.
+- **Deterministic `Trip Sub-ID` Architecture**:
+  - Introduced canonical reference IDs formatted as `[TYPE]-[HUB]-[IDENTIFIER]-[MMDD]-[HHMM]-[SLOT]` (e.g., `PU-SFO-UA1234-1025-1430-A`).
+  - Completely eliminates the classic Google Sheets row-shift / formula-desync bug where sorting or filtering misaligns driver names from passenger flights.
+- **Family & Minor Co-location Protection**:
+  - Leverages the multi-child composite resolution engine to cluster siblings and family members sharing emails or parent/guardian contacts as indivisible atomic units.
+  - Guarantees parents and minors are never split across different vehicle runs.
+- **Arrival/Departure Window Clustering**:
+  - Implemented configurable time-window clustering (`ArrivalClusterWindowMinutes`, default: 30 minutes) to combine flights landing closely at the same airport into a unified airport pickup run, optimizing volunteer driver trips.
+- **Manual Host Church Communication Tooling**:
+  - **No Automated Email Dispatches**: Excluded automated system emails to respect church operational preferences for direct volunteer communication.
+  - **One-Click Dispatch SMS Text Generator**: Auto-generates a personalized, copy-ready SMS/WhatsApp dispatch message in Column 22 of the Master sheet, complete with exact passenger names, phone numbers, flight details, luggage estimates, and church coordinator contacts.
+  - **Interactive Coordinator Status Tracking**: Added dropdown tracking in Column 21 (`Unassigned`, `Driver Claimed`, `Confirmed / Contacted`, `Reassign Needed`, `Completed`).
+- **Protected Public Workbook & Automated Provisioning**:
+  - **Automated Provisioning Wizard**: Added `USGA Events > Transportation & Drivers > Generate Public Driver Signup Sheet` to create, format, link, and protect the public workbook in one click.
+  - **Shared-Drive-Compatible Event Folder Placement (`resolveEventRegistrationFolder` & `File.moveTo`)**: Automatically places the `[Event Title] - Volunteer Driver Signups (Public)` spreadsheet directly inside that event's registration Drive folder using `newFile.moveTo(parentFolder)` (compatible with Google Shared Drives), with a secondary fallback lookup against the `Drive Folder URL` column in `System Log`.
+  - **Smart Menu Target Resolution (`resolveTargetEventSpreadsheetForMenu`)**: When top-level transportation menu actions are invoked from the Master Form Generator workbook rather than an individual event response sheet, automatically prompts for the target Event Response Spreadsheet URL so actions always target the intended event and its folder.
+  - **Protected Ranges**: Locks schedule, flight, and passenger columns against public tampering while unprotecting only the Driver Input columns (`Columns H:K`).
+- **Dedicated Driver Roster & Concurrency Safety**:
+  - **Driver Summary Roster**: Adds an automated `Driver Roster` tab in Master grouping all assignments chronologically by volunteer driver.
+  - **Multi-Event Background Sync (`backgroundTransportationSync`)**: Automated 15-minute cron trigger iterates across all active monitored events in `FormsToMonitor` that have a linked `PublicTransportSheetId`, ensuring hands-free bidirectional synchronization.
+  - **LockService Concurrency**: Prevents race conditions during simultaneous public edits using script-level locking and atomic batch writing.
+- **Active Events Sidebar Integration**:
+  - Added a dedicated **🚗 Transportation & Drivers** card inside `ManageEventsSidebar.html` with real-time status display and one-click sync / setup buttons.
 
 ---
 
