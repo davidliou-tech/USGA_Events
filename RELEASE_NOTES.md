@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.5 (Current) - Dual-Sheet Transportation & Multi-Driver Sync Engine](#version-295)
+- [Version 2.9.6 (Current) - Runtime Blocker Fixes, Operational Integrity & Performance Optimization](#version-296)
+- [Version 2.9.5 - Dual-Sheet Transportation & Multi-Driver Sync Engine](#version-295)
 - [Version 2.9.4 - Dedicated Lodging Sheet, Room Inventory & Host Church Room Import](#version-294)
 - [Version 2.9.3 - Host Church Logistics, Lodging Standardization & International Phone Fix](#version-293)
 - [Version 2.9.2 - Maintenance & Lifecycle Optimization](#version-292)
@@ -20,6 +21,50 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-296"></a>
+## Version 2.9.6
+*October 2026*
+
+### Critical Runtime Blockers & Syntax Bug Fixes
+- **Declared Missing Variables in `generateForm()`**:
+  - Resolved fatal `ReferenceError: hasBefore is not defined` by explicitly declaring `hasBefore` and `hasAfter` before checking lodging selection fields.
+- **Corrupted JavaScript Syntax Repaired across HTML Sidebars**:
+  - Restored proper arithmetic subtraction operators (`-`) in date calculations and capacity countdowns (`m - 1`, `idxA - idxB`, `max - count`) and fixed multiline template literals across `Sidebar.html` and `ManageEventsSidebar.html`.
+- **Reordered Specific vs. Generic Field Types in `addFieldToForm()`**:
+  - Restructured field type evaluation order so custom handlers for `Food/Medicine Restrictions`, `Interpretation Language`, and `Other Special Needs/Accommodations` are evaluated before generic `short answer`, `paragraph`, or `dropdown` matches, restoring custom help texts and configurations.
+
+### High-Priority Operational Logic & Privacy
+- **Early Evaluation of Rejection & Waitlist**:
+  - In `masterRespondToRegistration(e)`, evaluations for `isRejected` (`Medical Consent = No`) and `isWaitlisted` now execute **before** any operational tabs are modified.
+  - Registrants declining liability release are immediately blocked from consuming room inventory or entering active driver queues. If an existing registrant switches consent to "No", their rows are set to `CANCELLED` and room/driver slots are released.
+  - Waitlisted attendees are marked `WAITLISTED` across `Pickup`, `Drop-Off`, `Lodging`, and `Logistics`, holding them off public volunteer driver rosters until officially promoted.
+- **Multi-Child `editResponseUrl` Disambiguation**:
+  - The reverse response lookup in `masterRespondToRegistration(e)` now checks `First Name` (and `Last Name`) via `matchesParticipantRecord()` alongside parent email, ensuring siblings sharing a parent email receive their own unique edit link rather than colliding.
+- **Archived Events Resurrection Fix**:
+  - `syncActiveEventsFromSystemLog()` now skips rows marked `"Archived"` in `System Log` and respects `ArchivedFormIds`. `getMonitoredEvents()` only triggers automatic synchronization when `FormsToMonitor` is completely empty.
+- **ScriptProperties 9KB Quota Protection**:
+  - Compacted `FormsToMonitor` properties by storing compact file IDs (`sheetId`, `pubTransId`) instead of full Google Docs URLs, slashing JSON size by ~65% and preventing quota exhaustion as event history accumulates. Full URLs are resolved dynamically.
+- **Apps Script 20-Trigger Hard Limit Management**:
+  - Added trigger quota auto-cleanup in `masterFormLifecycleCron()`: when registration ended >14 days ago, the script automatically deletes the spreadsheet-level `masterRespondToRegistration` trigger via `ScriptApp.deleteTrigger(trig)` and sets `config.triggerReleased = true`.
+- **Attendee Privacy Protection**:
+  - Removed unlinked `"Attendees: View Here"` text from the public form description to prevent attendee roster disclosure.
+
+### Concurrency, Data Integrity & Performance
+- **Atomic `LockService` with Fast Release in `masterRespondToRegistration(e)`**:
+  - Wrapped status evaluation and sheet updates with `LockService.getScriptLock()` (30s timeout).
+  - Wrote preliminary statuses (`"Confirmed - Sending..."`, `"Waitlist - Sending..."`, `"Rejected - Sending..."`), updated operational sheets, called `SpreadsheetApp.flush()`, and **released the lock before invoking FormApp and GmailApp/MailApp**, eliminating lock contention during network delivery.
+- **Batch `setValues()` in Migration & Sync Tools**:
+  - Replaced sequential `appendRow()` loops in `upgradeExistingSheet()` and `syncLodgingAndRoomsForSheet()` with batch `.setValues()` writes, eliminating 6-minute script execution timeouts on large events.
+- **Preserved Dynamic Building Lookup Formulas**:
+  - `upgradeExistingSheet()` now guarantees `getBuildingLookupFormula()` is written into the `Building` column, ensuring live `Room Inventory` lookups remain dynamic.
+- **Full 22-Column Schema Initialization for Transportation**:
+  - Implemented `buildFullTransportationRow()`, guaranteeing new records on `Pickup` and `Drop-Off` populate all 22 columns with `Coordinator Status` defaulted to `"Unassigned"` to satisfy strict data validation rules.
+- **Web App Security & Timezone Clarity**:
+  - `doPost(e)` validates that `coordinatorEmail` ends with the authorized domain (`@tjc.org` or configured `ALLOWED_EMAIL_DOMAIN`) and checks optional `WEB_APP_SECRET_TOKEN`. `generateForm()` forwards `secretToken` during delegated execution.
+  - Added live timezone labels (`Intl.DateTimeFormat().resolvedOptions().timeZone`) next to date/time pickers in both sidebars to prevent cross-timezone confusion.
 
 ---
 

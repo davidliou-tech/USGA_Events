@@ -78,25 +78,41 @@ function syncActiveEventsFromSystemLog() {
   const respSsUrlIdx = headers.indexOf("Response Sheet URL");
   const folderUrlIdx = headers.indexOf("Drive Folder URL");
   const sendAsIdx = headers.indexOf("Send-As Mailbox");
+  const archiveStatusIdx = headers.indexOf("Archive Status");
   
   const props = PropertiesService.getScriptProperties();
   const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const archivedIds = JSON.parse(props.getProperty('ArchivedFormIds') || '[]');
   
   let syncedCount = 0;
   
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
+    
+    // Ignore archived events in System Log
+    if (archiveStatusIdx !== -1 && String(row[archiveStatusIdx]).toLowerCase().trim() === "archived") {
+      continue;
+    }
+
     const eventTitle = (titleIdx !== -1 && row[titleIdx]) ? String(row[titleIdx]).trim() : ((templateIdx !== -1 && row[templateIdx]) ? String(row[templateIdx]).trim() : "Event " + i);
     const formUrl = formUrlIdx !== -1 ? String(row[formUrlIdx]).trim() : "";
     const respSsUrl = respSsUrlIdx !== -1 ? String(row[respSsUrlIdx]).trim() : "";
     const folderUrl = folderUrlIdx !== -1 ? String(row[folderUrlIdx]).trim() : "";
     const sendAs = sendAsIdx !== -1 ? String(row[sendAsIdx]).trim() : "us.events@tjc.org";
     
+    // Extract sheetId
+    let sheetId = null;
+    if (respSsUrl) {
+      const ssMatch = respSsUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+      if (ssMatch) sheetId = ssMatch[1];
+    }
+
     // Check if any existing monitored form already matches this event by title, sheetUrl, or formUrl
     let formId = null;
     for (const id in formsToMonitor) {
       const cfg = formsToMonitor[id];
-      if ((cfg.sheetUrl && respSsUrl && cfg.sheetUrl === respSsUrl) ||
+      const cfgSheetId = cfg.sheetId || (cfg.sheetUrl ? (cfg.sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) || [])[1] : null);
+      if ((sheetId && cfgSheetId && sheetId === cfgSheetId) ||
           (cfg.title && eventTitle && cfg.title.toLowerCase() === eventTitle.toLowerCase()) ||
           (cfg.publishedUrl && formUrl && cfg.publishedUrl === formUrl)) {
         formId = id;
@@ -115,19 +131,16 @@ function syncActiveEventsFromSystemLog() {
       }
       
       // 2. Resolve via Response Spreadsheet URL (Spreadsheet.getFormUrl() returns the direct form edit URL)
-      if (!formId && respSsUrl) {
-        const ssMatch = respSsUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-        if (ssMatch) {
-          try {
-            const respSs = SpreadsheetApp.openById(ssMatch[1]);
-            const editFormUrl = respSs.getFormUrl();
-            if (editFormUrl) {
-              const editMatch = editFormUrl.match(/\/forms\/d\/([a-zA-Z0-9_-]+)/);
-              if (editMatch) formId = editMatch[1];
-            }
-          } catch (e) {
-            Logger.log(`Could not open response spreadsheet ${respSsUrl}: ${e.message}`);
+      if (!formId && sheetId) {
+        try {
+          const respSs = SpreadsheetApp.openById(sheetId);
+          const editFormUrl = respSs.getFormUrl();
+          if (editFormUrl) {
+            const editMatch = editFormUrl.match(/\/forms\/d\/([a-zA-Z0-9_-]+)/);
+            if (editMatch) formId = editMatch[1];
           }
+        } catch (e) {
+          Logger.log(`Could not open response spreadsheet ${sheetId}: ${e.message}`);
         }
       }
       
@@ -148,6 +161,11 @@ function syncActiveEventsFromSystemLog() {
       }
     }
     
+    // Skip if in archived IDs
+    if (formId && archivedIds.includes(formId)) {
+      continue;
+    }
+
     if (formId) {
       if (!formsToMonitor[formId]) {
         formsToMonitor[formId] = {
@@ -159,20 +177,16 @@ function syncActiveEventsFromSystemLog() {
           contactEmail: sendAs || "us.events@tjc.org",
           timeZone: Session.getScriptTimeZone(),
           isZh: false,
-          publishedUrl: formUrl,
-          sheetUrl: respSsUrl
+          sheetId: sheetId
         };
         syncedCount++;
       } else {
-        // Update cached title and URLs if missing or placeholder
+        // Update cached title and sheetId if missing or placeholder
         if (!formsToMonitor[formId].title || formsToMonitor[formId].title.startsWith("Unknown Event") || formsToMonitor[formId].title.startsWith("Event (ID:")) {
           formsToMonitor[formId].title = eventTitle;
         }
-        if (!formsToMonitor[formId].sheetUrl && respSsUrl) {
-          formsToMonitor[formId].sheetUrl = respSsUrl;
-        }
-        if (!formsToMonitor[formId].publishedUrl && formUrl) {
-          formsToMonitor[formId].publishedUrl = formUrl;
+        if (!formsToMonitor[formId].sheetId && sheetId) {
+          formsToMonitor[formId].sheetId = sheetId;
         }
       }
     }
@@ -214,13 +228,13 @@ function getMonitoredEvents() {
   const props = PropertiesService.getScriptProperties();
   let formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
   
-  // Auto-sync from System Log if formsToMonitor has fewer events than rows in System Log
+  // Auto-sync from System Log only if formsToMonitor is completely empty
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const logSheet = ss.getSheetByName("System Log");
     if (logSheet && logSheet.getLastRow() > 1) {
       const logRows = logSheet.getLastRow() - 1;
-      if (Object.keys(formsToMonitor).length < logRows) {
+      if (Object.keys(formsToMonitor).length === 0 && logRows > 0) {
         syncActiveEventsFromSystemLog();
         formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
       }
@@ -234,9 +248,10 @@ function getMonitoredEvents() {
   for (const formId in formsToMonitor) {
     const config = formsToMonitor[formId];
     let title = config.title || "";
-    let publishedUrl = config.publishedUrl || "";
-    let editUrl = config.editUrl || "";
-    let sheetUrl = config.sheetUrl || "";
+    let sId = config.sheetId || (config.sheetUrl ? (config.sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) || [])[1] : null);
+    let publishedUrl = config.publishedUrl || (formId ? `https://docs.google.com/forms/d/${formId}/viewform` : "");
+    let editUrl = config.editUrl || (formId ? `https://docs.google.com/forms/d/${formId}/edit` : "");
+    let sheetUrl = config.sheetUrl || (sId ? `https://docs.google.com/spreadsheets/d/${sId}/edit` : "");
     
     // Quick fallback to get title if not cached
     if (!title || title.startsWith("Unknown Event") || title.startsWith("Event (ID:")) {
@@ -247,9 +262,20 @@ function getMonitoredEvents() {
         publishedUrl = form.getPublishedUrl() || publishedUrl;
         editUrl = form.getEditUrl() || editUrl;
         config.title = title;
-        config.publishedUrl = publishedUrl;
-        config.editUrl = editUrl;
-        formsToMonitor[formId] = config;
+        if (sId) config.sheetId = sId;
+        // Keep compact in properties
+        formsToMonitor[formId] = {
+          title: title,
+          start: config.start,
+          end: config.end,
+          isExactEnd: !!config.isExactEnd,
+          max: config.max,
+          contactEmail: config.contactEmail || "us.events@tjc.org",
+          timeZone: config.timeZone || Session.getScriptTimeZone(),
+          isZh: !!config.isZh,
+          sheetId: sId,
+          pubTransId: config.pubTransId || config.publicTransportSheetId || null
+        };
         props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
       } catch(e) {
         title = title || "Event (ID: " + formId.substring(0, 8) + "...)";
@@ -275,9 +301,10 @@ function getEventDetails(formId) {
   const config = formsToMonitor[formId] || {};
   
   let title = config.title || "";
-  let publishedUrl = config.publishedUrl || "";
-  let editUrl = config.editUrl || "";
-  let sheetUrl = config.sheetUrl || "";
+  let sId = config.sheetId || (config.sheetUrl ? (config.sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) || [])[1] : null);
+  let publishedUrl = config.publishedUrl || (formId ? `https://docs.google.com/forms/d/${formId}/viewform` : "");
+  let editUrl = config.editUrl || (formId ? `https://docs.google.com/forms/d/${formId}/edit` : "");
+  let sheetUrl = config.sheetUrl || (sId ? `https://docs.google.com/spreadsheets/d/${sId}/edit` : "");
   let isOpen = false;
   let registrantCount = 0;
   
@@ -288,13 +315,10 @@ function getEventDetails(formId) {
     editUrl = form.getEditUrl() || editUrl;
     isOpen = form.isAcceptingResponses();
     
-    let destId = form.getDestinationId();
-    if (!destId && sheetUrl) {
-      const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-      if (match) destId = match[1];
-    }
+    let destId = form.getDestinationId() || sId;
     
     if (destId) {
+      sId = destId;
       try {
         const respSs = SpreadsheetApp.openById(destId);
         sheetUrl = respSs.getUrl();
@@ -311,14 +335,19 @@ function getEventDetails(formId) {
     Logger.log("Error loading form details for " + formId + ": " + e.message);
   }
   
-  // Cache updated values into formsToMonitor
+  // Cache updated values compactly into formsToMonitor
   if (title && title !== "Deleted/Inaccessible Form") {
     formsToMonitor[formId] = {
-      ...config,
       title: title,
-      publishedUrl: publishedUrl,
-      editUrl: editUrl,
-      sheetUrl: sheetUrl
+      start: config.start,
+      end: config.end,
+      isExactEnd: !!config.isExactEnd,
+      max: config.max,
+      contactEmail: config.contactEmail || "us.events@tjc.org",
+      timeZone: config.timeZone || Session.getScriptTimeZone(),
+      isZh: !!config.isZh,
+      sheetId: sId,
+      pubTransId: config.pubTransId || config.publicTransportSheetId || null
     };
     props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
   }
@@ -342,9 +371,25 @@ function updateMonitoredEvent(formId, updatedConfig) {
     const props = PropertiesService.getScriptProperties();
     const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
     
+    const existing = formsToMonitor[formId] || {};
+    let sId = updatedConfig.sheetId || existing.sheetId;
+    if (!sId && updatedConfig.sheetUrl) {
+      const m = updatedConfig.sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+      if (m) sId = m[1];
+    }
+    let pId = updatedConfig.pubTransId || updatedConfig.publicTransportSheetId || existing.pubTransId || existing.publicTransportSheetId || null;
+
     formsToMonitor[formId] = {
-      ...(formsToMonitor[formId] || {}),
-      ...updatedConfig
+      title: updatedConfig.title !== undefined ? updatedConfig.title : (existing.title || ""),
+      start: updatedConfig.start !== undefined ? updatedConfig.start : existing.start,
+      end: updatedConfig.end !== undefined ? updatedConfig.end : existing.end,
+      isExactEnd: updatedConfig.isExactEnd !== undefined ? !!updatedConfig.isExactEnd : !!existing.isExactEnd,
+      max: updatedConfig.max !== undefined ? updatedConfig.max : existing.max,
+      contactEmail: updatedConfig.contactEmail !== undefined ? updatedConfig.contactEmail : (existing.contactEmail || "us.events@tjc.org"),
+      timeZone: updatedConfig.timeZone || existing.timeZone || Session.getScriptTimeZone(),
+      isZh: updatedConfig.isZh !== undefined ? !!updatedConfig.isZh : !!existing.isZh,
+      sheetId: sId,
+      pubTransId: pId
     };
     
     props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
@@ -440,8 +485,41 @@ function archiveMonitoredEvent(formId) {
       }
     }
 
-    // Remove from FormsToMonitor
+    // Record in ArchivedFormIds in ScriptProperties
     const props = PropertiesService.getScriptProperties();
+    const archivedIds = JSON.parse(props.getProperty('ArchivedFormIds') || '[]');
+    if (!archivedIds.includes(formId)) {
+      archivedIds.push(formId);
+      props.setProperty('ArchivedFormIds', JSON.stringify(archivedIds));
+    }
+
+    // Mark Archive Status in System Log
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const logSheet = ss.getSheetByName("System Log");
+      if (logSheet && logSheet.getLastRow() > 1) {
+        let headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+        let archiveColIdx = headers.indexOf("Archive Status") + 1;
+        if (archiveColIdx === 0) {
+          archiveColIdx = headers.length + 1;
+          logSheet.getRange(1, archiveColIdx).setValue("Archive Status").setFontWeight("bold").setBackground("#f3f3f3");
+        }
+        const formUrlCol = headers.indexOf("Form URL") + 1;
+        const respUrlCol = headers.indexOf("Response Sheet URL") + 1;
+        const logData = logSheet.getDataRange().getValues();
+        for (let r = 1; r < logData.length; r++) {
+          const fUrl = formUrlCol > 0 ? String(logData[r][formUrlCol - 1]) : "";
+          const sUrl = respUrlCol > 0 ? String(logData[r][respUrlCol - 1]) : "";
+          if ((fUrl && fUrl.includes(formId)) || (destId && sUrl && sUrl.includes(destId))) {
+            logSheet.getRange(r + 1, archiveColIdx).setValue("Archived");
+          }
+        }
+      }
+    } catch (logErr) {
+      Logger.log("Could not update Archive Status in System Log: " + logErr.message);
+    }
+
+    // Remove from FormsToMonitor
     const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
     if (formsToMonitor[formId]) {
       delete formsToMonitor[formId];
@@ -600,6 +678,24 @@ function setupTransportationSheets(ss) {
   }
 
   return { pickupSheet: pickupSheet, dropoffSheet: dropoffSheet };
+}
+
+function buildFullTransportationRow(headers, baseRowData, defaultCoordinatorStatus) {
+  const coordStatus = defaultCoordinatorStatus || "Unassigned";
+  const numCols = (headers && headers.length) ? headers.length : Math.max(baseRowData.length, 22);
+  const fullRow = new Array(numCols).fill("");
+  for (let c = 0; c < baseRowData.length && c < numCols; c++) {
+    fullRow[c] = baseRowData[c];
+  }
+  if (headers && headers.length) {
+    const coordIdx = headers.indexOf("Coordinator Status");
+    if (coordIdx !== -1) {
+      fullRow[coordIdx] = coordStatus;
+    }
+  } else if (numCols >= 21) {
+    fullRow[20] = coordStatus;
+  }
+  return fullRow;
 }
 
 function columnToLetter(column) {
@@ -1187,6 +1283,8 @@ function generateForm(payload) { try {
     if (delegatedUrl && !isMasterUser) {
       payload.coordinatorEmail = activeEmail;
       payload.isDelegatedExecution = true;
+      const secretToken = props.getProperty('WEB_APP_SECRET_TOKEN');
+      if (secretToken) payload.secretToken = secretToken;
       
       let delegationError = null;
 
@@ -1451,12 +1549,6 @@ function generateForm(payload) { try {
     descLines.push(base);
   }
 
-  let attendeesLine = `𝗔𝘁𝘁𝗲𝗻𝗱𝗲𝗲𝘀: View Here`;
-  if (hasLang) {
-    attendeesLine += `\n${t_only('Attendees') || 'Attendees'}: ${t_only('View Here') || 'View Here'}`;
-  }
-  descLines.push(attendeesLine);
-  
   let isMinorEvent = false;
   
   if (payload.eventDetails.includesMinors !== undefined) {
@@ -1610,6 +1702,9 @@ function generateForm(payload) { try {
      if (stayField) stayField.required = true;
   }
   
+  const hasBefore = payload.selectedFields.some(f => f.name === 'I need lodging before the event');
+  const hasAfter = payload.selectedFields.some(f => f.name === 'I need lodging after the event');
+
   if (!hasBefore) {
      payload.selectedFields.push({
          name: 'I need lodging before the event',
@@ -2042,11 +2137,8 @@ function generateForm(payload) { try {
       contactEmail: payload.eventDetails.contactEmail || "us.events@tjc.org",
       timeZone: payload.eventDetails.userTimeZone || Session.getScriptTimeZone(),
       isZh: isZh,
-      publishedUrl: form.getPublishedUrl(),
-      editUrl: form.getEditUrl(),
-      sheetUrl: responseSs.getUrl(),
-      publicTransportSheetId: publicTransportId,
-      publicTransportSheetUrl: publicTransportUrl
+      sheetId: responseSs.getId(),
+      pubTransId: publicTransportId || null
     };
     props.setProperty('FormsToMonitor', JSON.stringify(monitor));
       
@@ -2398,21 +2490,7 @@ if (field.name === 'Arrival City/Airport' || field.name === 'Departure City/Airp
   return item;
 }
 
-  if (typeStr.includes('short answer') || typeStr.includes('text') || typeStr.includes('number')) {
-    item = form.addTextItem().setTitle(t(field.name));
-  } 
-  else if (typeStr.includes('paragraph')) {
-    item = form.addParagraphTextItem().setTitle(t(field.name));
-  }
-  else if (typeStr.includes('dropdown')) {
-    item = form.addListItem().setTitle(t(field.name));
-    if (field.options && field.options.length > 0) {
-      item.setChoiceValues(field.options.map(o => t(o)));
-    } else {
-      item.setChoiceValues([t('Option 1'), t('Option 2'), t('Option 3')]);
-    }
-  }
-  else if (field.name === 'Food/Medicine Restrictions') {
+  if (field.name === 'Food/Medicine Restrictions') {
     item = form.addParagraphTextItem().setTitle(t(field.name));
     item.setHelpText(t('Please share any dietary restrictions, allergies, or medicines, including any special dietary needs.'));
     if (field.required) item.setRequired(true);
@@ -2432,6 +2510,20 @@ if (field.name === 'Arrival City/Airport' || field.name === 'Departure City/Airp
     item.setHelpText(t('Please share any other special needs or accommodations required.'));
     if (field.required) item.setRequired(true);
     return item;
+  }
+  else if (typeStr.includes('short answer') || typeStr.includes('text') || typeStr.includes('number')) {
+    item = form.addTextItem().setTitle(t(field.name));
+  } 
+  else if (typeStr.includes('paragraph')) {
+    item = form.addParagraphTextItem().setTitle(t(field.name));
+  }
+  else if (typeStr.includes('dropdown')) {
+    item = form.addListItem().setTitle(t(field.name));
+    if (field.options && field.options.length > 0) {
+      item.setChoiceValues(field.options.map(o => t(o)));
+    } else {
+      item.setChoiceValues([t('Option 1'), t('Option 2'), t('Option 3')]);
+    }
   }
   
   else if (typeStr.includes('radio') || typeStr.includes('multiple choice')) {
@@ -2568,32 +2660,47 @@ function matchesParticipantRecord(rowFirst, rowLast, rowEmail, targetFirst, targ
   return false;
 }
 
-/**
- * Centralized email handler triggered whenever ANY generated form is submitted.
- */
 function masterRespondToRegistration(e) {
+  const lock = LockService.getScriptLock();
   try {
-    const sheet = e.range.getSheet();
-    const responseSs = sheet.getParent();
-    
-    // GOOGLE FORMS EDIT BUG FIX:
-    // e.namedValues drops unmodified fields during an edit.
-    // Instead, we build the exact same object using the live spreadsheet row to guarantee 100% of the data is present.
-    const rowNum = e.range.getRow();
+    lock.waitLock(30000);
+  } catch (lockErr) {
+    Logger.log("masterRespondToRegistration: Could not acquire lock within 30s: " + lockErr.message);
+  }
+
+  let editResponseUrl = "";
+  let emailRecipient = "";
+  let firstName = "Registrant";
+  let lastName = "";
+  let phone = "";
+  let medicalConsent = "";
+  let isRejected = false;
+  let isWaitlisted = false;
+  let isEdit = false;
+  let maxAttendees = null;
+  let settings = {
+    EventName: "USGA Event",
+    OrgName: "USGA",
+    ContactEmail: "us.events@tjc.org"
+  };
+  let responseSs = null;
+  let sheet = null;
+  let row = 0;
+  let responses = {};
+  let statusColIndex = 0;
+
+  try {
+    sheet = e.range.getSheet();
+    responseSs = sheet.getParent();
+    row = e.range.getRow();
+
     const headersRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
-    const rowData = sheet.getRange(rowNum, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const rowData = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
     
-    const responses = {};
     for (let i = 0; i < headersRow.length; i++) {
         responses[String(headersRow[i])] = [String(rowData[i])];
     }
-    
-    let emailRecipient = "";
-    let firstName = "Registrant";
-    let medicalConsent = "";
-    let ageValue = "";
-    let parentGuardianName = "";
-    
+
     if (responses["Email Address"] && responses["Email Address"][0]) {
       emailRecipient = responses["Email Address"][0];
     }
@@ -2605,496 +2712,584 @@ function masterRespondToRegistration(e) {
       if (!emailRecipient && hLower.includes("email") && !hLower.includes("minor")) {
         emailRecipient = val;
       }
-      if (hLower.includes("first name")) {
-        if (val) {
-          firstName = val;
-        }
+      if (hLower.includes("first name") && val) {
+        firstName = val;
+      }
+      if (hLower.includes("last name") && val) {
+        lastName = val;
+      }
+      if (hLower.includes("phone") && !hLower.includes("emergency")) {
+        phone = formatSheetTextValue(val, true);
       }
       if (hLower.includes("medical consent") || hLower.includes("liability release")) {
         medicalConsent = val;
       }
-      if (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group"))) {
-        ageValue = val;
-      }
-      if (hLower.includes("parent/guardian") && !hLower.includes("signature")) {
-        parentGuardianName = val;
-      }
     }
     
-    // FALLBACK: Google Forms sometimes omits system-collected emails on EDIT events.
-    // If we still don't have an email, pull it directly from the spreadsheet row.
     if (!emailRecipient) {
-      const rowNum = e.range.getRow();
-      const headersRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-      let emailColIdx = -1;
       for (let i = 0; i < headersRow.length; i++) {
         if (String(headersRow[i]).toLowerCase().includes("email") && !String(headersRow[i]).toLowerCase().includes("minor")) {
-           emailColIdx = i + 1;
-           break;
+          emailRecipient = sheet.getRange(row, i + 1).getValue();
+          break;
         }
-      }
-      if (emailColIdx !== -1) {
-         emailRecipient = sheet.getRange(rowNum, emailColIdx).getValue();
       }
     }
     
-    if (!emailRecipient) return;
+    if (!emailRecipient) {
+      if (lock.hasLock()) lock.releaseLock();
+      return;
+    }
 
-    let settings = {
-      EventName: "USGA Event",
-      OrgName: "USGA",
-      ContactEmail: "us.events@tjc.org"
-    };
     const settingsSheet = responseSs.getSheetByName("Settings");
     if (settingsSheet) {
       const settingsData = settingsSheet.getRange("A2:B4").getValues();
-      settingsData.forEach(row => { settings[row[0]] = row[1]; });
+      settingsData.forEach(r => { settings[r[0]] = r[1]; });
     } else {
-      // Backward compatibility for older forms without a Settings tab
       try {
-         const formUrl = responseSs.getFormUrl();
-         if (formUrl) {
-            settings.EventName = FormApp.openByUrl(formUrl).getTitle();
-         }
+        const formUrl = responseSs.getFormUrl();
+        if (formUrl) {
+          settings.EventName = FormApp.openByUrl(formUrl).getTitle();
+        }
       } catch(e) {}
     }
 
-    const isRejected = medicalConsent.toLowerCase().startsWith("no");
+    isRejected = medicalConsent.toLowerCase().startsWith("no");
 
-    const commonStyles = `style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50;"`;
-    const signature = `<p ${commonStyles}>In Christ,<br><span style="color: #2980b9; font-weight: bold;">${settings.OrgName}</span></p>`;
-
-    let logoBlob = null;
-    let logoHtml = "";
-    try {
-      logoBlob = DriveApp.getFileById("1KltAMA0tXmJeeam2pg_omUjMvD5_un-d").getBlob();
-      logoHtml = `<img src="cid:usgaLogo" alt="${settings.OrgName} Logo" style="max-width: 150px; height: auto; margin-bottom: 20px;">`;
-    } catch (err) {
-      Logger.log("Could not load logo: " + err.message);
+    // ----------------------------------------------------
+    // Waitlist & Status Evaluation (BEFORE operational sync)
+    // ----------------------------------------------------
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    statusColIndex = headers.indexOf("Email Status") + 1;
+    
+    let existingStatus = "";
+    if (statusColIndex > 0 && row <= sheet.getLastRow()) {
+      existingStatus = String(sheet.getRange(row, statusColIndex).getValue() || "").trim();
+      if (existingStatus) isEdit = true;
     }
 
     try {
-      let lastName = "", phone = "", arrDetails = "", arrDate = "", arrTime = "", depCity = "", arrCity = "", arrAirline = "", arrFlight = "";
-      let arrTrainStation = "", arrCarrier = "", arrTrainNumber = "";
-      let depDetails = "", depDate = "", depTime = "", depCityOut = "", depAirline = "", depFlight = "", destCity = "";
-      let depTrainStation = "", depCarrier = "", depTrainNumber = "";
+      const props = PropertiesService.getScriptProperties();
+      const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+      const formUrl = sheet.getFormUrl();
+      if (formUrl) {
+        const formId = FormApp.openByUrl(formUrl).getId();
+        if (formsToMonitor[formId] && formsToMonitor[formId].max) {
+          maxAttendees = formsToMonitor[formId].max;
+          
+          if (!isRejected) {
+            if (existingStatus.includes("Confirmation")) {
+              isWaitlisted = false;
+            } else if (existingStatus.includes("Waitlist")) {
+              isWaitlisted = true;
+            } else {
+              let confirmedCount = 0;
+              const medColIdx = headers.findIndex(h => {
+                const s = String(h).toLowerCase();
+                return s.includes("medical consent") || s.includes("liability release");
+              }) + 1;
 
-      for (let header in responses) {
-        let hLower = header.toLowerCase();
-        let val = responses[header][0];
-        
-        if (hLower.includes("last name")) lastName = val;
-        else if (hLower.includes("phone") && !hLower.includes("emergency")) phone = formatSheetTextValue(val, true);
-        else if (hLower.includes("arrival details") || hLower.includes("arrival arrangements") || hLower.includes("arriving by")) arrDetails = val;
-        else if (hLower.includes("arrival date")) arrDate = val;
-        else if (hLower.includes("arrival time")) arrTime = val;
-        else if (hLower.includes("departing city")) depCity = val;
-        else if (hLower.includes("arrival city")) arrCity = val;
-        else if (hLower.includes("arrival airline")) arrAirline = val;
-        else if (hLower.includes("arrival flight number")) arrFlight = val;
-        else if (hLower.includes("arrival train") || (hLower.includes("arrival") && hLower.includes("station"))) arrTrainStation = val;
-        else if (hLower.includes("arrival carrier")) arrCarrier = val;
-        else if (hLower.includes("arrival train/bus number") || (hLower.includes("arrival") && hLower.includes("bus number"))) arrTrainNumber = val;
-        else if (hLower.includes("departure details") || hLower.includes("departure arrangements") || hLower.includes("departing by")) depDetails = val;
-        else if (hLower.includes("departure date")) depDate = val;
-        else if (hLower.includes("departure time")) depTime = val;
-        else if (hLower.includes("departure city") && !hLower.includes("departing")) depCityOut = val;
-        else if (hLower.includes("departure airline")) depAirline = val;
-        else if (hLower.includes("departure flight number")) depFlight = val;
-        else if (hLower.includes("destination city")) destCity = val;
-        else if (hLower.includes("departure train") || (hLower.includes("departure") && hLower.includes("station"))) depTrainStation = val;
-        else if (hLower.includes("departure carrier")) depCarrier = val;
-        else if (hLower.includes("departure train/bus number") || (hLower.includes("departure") && hLower.includes("bus number"))) depTrainNumber = val;
-      }
+              if (row > 2) {
+                const priorStatuses = statusColIdx > 0 
+                  ? sheet.getRange(2, statusColIdx, row - 2, 1).getValues() 
+                  : [];
+                const priorConsents = medColIdx > 0
+                  ? sheet.getRange(2, medColIdx, row - 2, 1).getValues()
+                  : [];
 
-      // ----------------------------------------------------
-      // Update Pickup Sheet Logic
-      // ----------------------------------------------------
-      const pickupSheet = responseSs.getSheetByName("Pickup");
-      if (pickupSheet) {
-        const data = pickupSheet.getDataRange().getValues();
-        let foundRowIndex = -1;
-        for (let i = 1; i < data.length; i++) {
-          if (matchesParticipantRecord(data[i][0], data[i][1], data[i][2], firstName, lastName, emailRecipient)) {
-            foundRowIndex = i + 1; // 1-indexed for Sheets
-            break;
+                for (let r = 0; r < row - 2; r++) {
+                  const stat = priorStatuses[r] ? String(priorStatuses[r][0]) : "";
+                  const med = priorConsents[r] ? String(priorConsents[r][0]).toLowerCase().trim() : "";
+                  
+                  if (med.startsWith("no") || stat.startsWith("Rejected")) continue;
+                  if (stat.startsWith("Waitlist")) continue;
+                  confirmedCount++;
+                }
+              }
+
+              if (confirmedCount >= maxAttendees) {
+                isWaitlisted = true;
+              }
+            }
           }
         }
+      }
+    } catch(err) {
+      Logger.log("Error checking waitlist: " + err.message);
+    }
 
-        const isFlightArr = arrDetails && arrDetails.toLowerCase().includes("flight");
-        const isTrainArr = arrDetails && (arrDetails.toLowerCase().includes("train") || arrDetails.toLowerCase().includes("bus"));
-        const needsPickup = isFlightArr || isTrainArr;
+    // Write preliminary status while under lock so concurrent submissions see our spot
+    if (statusColIndex === 0) {
+      statusColIndex = headers.length + 1;
+      sheet.getRange(1, statusColIndex).setValue("Email Status").setFontWeight("bold");
+    }
+    const prelimStatus = isRejected ? "Rejected - Sending..." : (isWaitlisted ? "Waitlist - Sending..." : "Confirmed - Sending...");
+    sheet.getRange(row, statusColIndex).setValue(prelimStatus);
 
-        const hasTrainBusCols = data[0].some(h => String(h).toLowerCase().includes("train/bus") || String(h).toLowerCase().includes("carrier"));
-        const statusIdx = hasTrainBusCols ? 14 : (data[0][4] && String(data[0][4]).toLowerCase().includes("details") ? 11 : 10);
+    // ----------------------------------------------------
+    // Operational Sheets Update (Pickup, Drop-Off, Logistics, Lodging)
+    // ----------------------------------------------------
+    let arrDetails = "", arrDate = "", arrTime = "", depCity = "", arrCity = "", arrAirline = "", arrFlight = "";
+    let arrTrainStation = "", arrCarrier = "", arrTrainNumber = "";
+    let depDetails = "", depDate = "", depTime = "", depCityOut = "", depAirline = "", depFlight = "", destCity = "";
+    let depTrainStation = "", depCarrier = "", depTrainNumber = "";
 
-        if (needsPickup) {
-          let flightStatus = "Active";
-          if (foundRowIndex !== -1) {
-             const oldRow = data[foundRowIndex - 1];
-             let changed = false;
-             if (hasTrainBusCols) {
-                changed = (
-                  oldRow[4] !== arrDetails ||
-                  String(oldRow[5]) !== String(arrDate) ||
-                  String(oldRow[6]) !== String(arrTime) ||
-                  oldRow[7] !== depCity ||
-                  oldRow[8] !== arrCity ||
-                  oldRow[9] !== arrAirline ||
-                  oldRow[10] !== arrFlight ||
-                  oldRow[11] !== arrTrainStation ||
-                  oldRow[12] !== arrCarrier ||
-                  oldRow[13] !== arrTrainNumber
-                );
-             } else {
-                let hasArrDetails = data[0][4] && String(data[0][4]).toLowerCase().includes("details");
-                changed = hasArrDetails 
-                  ? (oldRow[4] !== arrDetails || String(oldRow[5]) !== String(arrDate) || String(oldRow[6]) !== String(arrTime) || oldRow[7] !== depCity || oldRow[8] !== arrCity || oldRow[9] !== arrAirline || oldRow[10] !== arrFlight)
-                  : (String(oldRow[4]) !== String(arrDate) || String(oldRow[5]) !== String(arrTime) || oldRow[6] !== depCity || oldRow[7] !== arrCity || oldRow[8] !== arrAirline || oldRow[9] !== arrFlight);
-             }
+    for (let header in responses) {
+      let hLower = header.toLowerCase();
+      let val = responses[header][0];
+      
+      if (hLower.includes("arrival details") || hLower.includes("arrival arrangements") || hLower.includes("arriving by")) arrDetails = val;
+      else if (hLower.includes("arrival date")) arrDate = val;
+      else if (hLower.includes("arrival time")) arrTime = val;
+      else if (hLower.includes("departing city")) depCity = val;
+      else if (hLower.includes("arrival city")) arrCity = val;
+      else if (hLower.includes("arrival airline")) arrAirline = val;
+      else if (hLower.includes("arrival flight number")) arrFlight = val;
+      else if (hLower.includes("arrival train") || (hLower.includes("arrival") && hLower.includes("station"))) arrTrainStation = val;
+      else if (hLower.includes("arrival carrier")) arrCarrier = val;
+      else if (hLower.includes("arrival train/bus number") || (hLower.includes("arrival") && hLower.includes("bus number"))) arrTrainNumber = val;
+      else if (hLower.includes("departure details") || hLower.includes("departure arrangements") || hLower.includes("departing by")) depDetails = val;
+      else if (hLower.includes("departure date")) depDate = val;
+      else if (hLower.includes("departure time")) depTime = val;
+      else if (hLower.includes("departure city") && !hLower.includes("departing")) depCityOut = val;
+      else if (hLower.includes("departure airline")) depAirline = val;
+      else if (hLower.includes("departure flight number")) depFlight = val;
+      else if (hLower.includes("destination city")) destCity = val;
+      else if (hLower.includes("departure train") || (hLower.includes("departure") && hLower.includes("station"))) depTrainStation = val;
+      else if (hLower.includes("departure carrier")) depCarrier = val;
+      else if (hLower.includes("departure train/bus number") || (hLower.includes("departure") && hLower.includes("bus number"))) depTrainNumber = val;
+    }
 
-             if (oldRow[statusIdx] === "CANCELLED") {
-                flightStatus = "Active"; // Restored
-             } else if (changed) {
-                flightStatus = "UPDATED"; // Highlight that flight/train info changed
-             } else {
-                flightStatus = oldRow[statusIdx] || "Active";
-             }
-          }
-          
-          let newRowData;
-          if (hasTrainBusCols) {
-            newRowData = [firstName, lastName, emailRecipient, phone, arrDetails, arrDate, arrTime, depCity, arrCity, arrAirline, arrFlight, arrTrainStation, arrCarrier, arrTrainNumber, flightStatus];
-          } else {
-            newRowData = [firstName, lastName, emailRecipient, phone, arrDetails, arrDate, arrTime, depCity, arrCity, arrAirline, arrFlight, flightStatus];
-          }
-          
-          if (foundRowIndex !== -1) {
-            pickupSheet.getRange(foundRowIndex, 1, 1, newRowData.length).setValues([newRowData]);
-            if (data[foundRowIndex - 1][statusIdx] === "CANCELLED" || flightStatus === "UPDATED") {
-              pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
-                         .setFontLine("none")
-                         .setBackground(flightStatus === "UPDATED" ? "#fff2cc" : null) // light yellow if updated
-                         .setFontColor(flightStatus === "UPDATED" ? "#b45f06" : null);
-            }
-          } else {
-            pickupSheet.appendRow([...newRowData, "", ""]);
-          }
-        } else if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+    // Pickup Sheet
+    const pickupSheet = responseSs.getSheetByName("Pickup");
+    if (pickupSheet) {
+      const data = pickupSheet.getDataRange().getValues();
+      let foundRowIndex = -1;
+      for (let i = 1; i < data.length; i++) {
+        if (matchesParticipantRecord(data[i][0], data[i][1], data[i][2], firstName, lastName, emailRecipient)) {
+          foundRowIndex = i + 1;
+          break;
+        }
+      }
+
+      const isFlightArr = arrDetails && arrDetails.toLowerCase().includes("flight");
+      const isTrainArr = arrDetails && (arrDetails.toLowerCase().includes("train") || arrDetails.toLowerCase().includes("bus"));
+      const needsPickup = isFlightArr || isTrainArr;
+      const hasTrainBusCols = data[0].some(h => String(h).toLowerCase().includes("train/bus") || String(h).toLowerCase().includes("carrier"));
+      const statusIdx = hasTrainBusCols ? 14 : (data[0][4] && String(data[0][4]).toLowerCase().includes("details") ? 11 : 10);
+
+      if (isRejected) {
+        if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
           pickupSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
           pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
                      .setFontLine("line-through")
-                     .setBackground("#f4cccc") // light red background
-                     .setFontColor("#666666"); // dark gray text
+                     .setBackground("#f4cccc")
+                     .setFontColor("#666666");
         }
-
-        if (pickupSheet.getLastRow() > 1) {
-           pickupSheet.getRange(2, 1, pickupSheet.getLastRow() - 1, pickupSheet.getLastColumn())
-                      .sort([{column: 6, ascending: true}, {column: 7, ascending: true}, {column: 9, ascending: true}]);
-        }
-      }
-
-      // ----------------------------------------------------
-      // Update Drop-Off Sheet Logic
-      // ----------------------------------------------------
-      const dropoffSheet = responseSs.getSheetByName("Drop-Off");
-      if (dropoffSheet) {
-        const data = dropoffSheet.getDataRange().getValues();
-        let foundRowIndex = -1;
-        for (let i = 1; i < data.length; i++) {
-          if (matchesParticipantRecord(data[i][0], data[i][1], data[i][2], firstName, lastName, emailRecipient)) {
-            foundRowIndex = i + 1;
-            break;
-          }
-        }
-
-        const isFlightDep = depDetails && depDetails.toLowerCase().includes("flight");
-        const isTrainDep = depDetails && (depDetails.toLowerCase().includes("train") || depDetails.toLowerCase().includes("bus"));
-        const needsDropoff = isFlightDep || isTrainDep;
-
-        const hasTrainBusCols = data[0].some(h => String(h).toLowerCase().includes("train/bus") || String(h).toLowerCase().includes("carrier"));
-        const statusIdx = hasTrainBusCols ? 14 : (data[0][4] && String(data[0][4]).toLowerCase().includes("details") ? 11 : 10);
-
-        if (needsDropoff) {
-          let flightStatus = "Active";
-          if (foundRowIndex !== -1) {
-             const oldRow = data[foundRowIndex - 1];
-             let changed = false;
-             if (hasTrainBusCols) {
-                changed = (
-                  oldRow[4] !== depDetails ||
-                  String(oldRow[5]) !== String(depDate) ||
-                  String(oldRow[6]) !== String(depTime) ||
-                  oldRow[7] !== depCityOut ||
-                  oldRow[8] !== depAirline ||
-                  oldRow[9] !== depFlight ||
-                  oldRow[10] !== destCity ||
-                  oldRow[11] !== depTrainStation ||
-                  oldRow[12] !== depCarrier ||
-                  oldRow[13] !== depTrainNumber
-                );
-             } else {
-                let hasDepDetails = data[0][4] && String(data[0][4]).toLowerCase().includes("details");
-                changed = hasDepDetails
-                  ? (oldRow[4] !== depDetails || String(oldRow[5]) !== String(depDate) || String(oldRow[6]) !== String(depTime) || oldRow[7] !== depCityOut || oldRow[8] !== depAirline || oldRow[9] !== depFlight || oldRow[10] !== destCity)
-                  : (String(oldRow[4]) !== String(depDate) || String(oldRow[5]) !== String(depTime) || oldRow[6] !== depCityOut || oldRow[7] !== depAirline || oldRow[8] !== depFlight || oldRow[9] !== destCity);
-             }
-
-             if (oldRow[statusIdx] === "CANCELLED") {
-                flightStatus = "Active";
-             } else if (changed) {
-                let ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yy h:mm a");
-                flightStatus = "Updated " + ts;
-             } else {
-                flightStatus = oldRow[statusIdx] || "Active";
-             }
-          }
-
-          let updateData;
+      } else if (needsPickup) {
+        let flightStatus = isWaitlisted ? "WAITLISTED" : "Active";
+        if (foundRowIndex !== -1) {
+          const oldRow = data[foundRowIndex - 1];
+          let changed = false;
           if (hasTrainBusCols) {
-            updateData = [firstName, lastName, emailRecipient, phone, depDetails, depDate, depTime, depCityOut, depAirline, depFlight, destCity, depTrainStation, depCarrier, depTrainNumber, flightStatus];
+            changed = (
+              oldRow[4] !== arrDetails ||
+              String(oldRow[5]) !== String(arrDate) ||
+              String(oldRow[6]) !== String(arrTime) ||
+              oldRow[7] !== depCity ||
+              oldRow[8] !== arrCity ||
+              oldRow[9] !== arrAirline ||
+              oldRow[10] !== arrFlight ||
+              oldRow[11] !== arrTrainStation ||
+              oldRow[12] !== arrCarrier ||
+              oldRow[13] !== arrTrainNumber
+            );
           } else {
-            let hasDepDetails = data[0][4] && String(data[0][4]).toLowerCase().includes("details");
-            updateData = hasDepDetails ? 
-              [firstName, lastName, emailRecipient, phone, depDetails, depDate, depTime, depCityOut, depAirline, depFlight, destCity, flightStatus] :
-              [firstName, lastName, emailRecipient, phone, depDate, depTime, depCityOut, depAirline, depFlight, destCity, flightStatus];
+            let hasArrDetails = data[0][4] && String(data[0][4]).toLowerCase().includes("details");
+            changed = hasArrDetails 
+              ? (oldRow[4] !== arrDetails || String(oldRow[5]) !== String(arrDate) || String(oldRow[6]) !== String(arrTime) || oldRow[7] !== depCity || oldRow[8] !== arrCity || oldRow[9] !== arrAirline || oldRow[10] !== arrFlight)
+              : (String(oldRow[4]) !== String(arrDate) || String(oldRow[5]) !== String(arrTime) || oldRow[6] !== depCity || oldRow[7] !== arrCity || oldRow[8] !== arrAirline || oldRow[9] !== arrFlight);
           }
-              
-          if (foundRowIndex !== -1) {
-            dropoffSheet.getRange(foundRowIndex, 1, 1, updateData.length).setValues([updateData]);
-            let isUpdated = String(flightStatus).startsWith("Updated");
-            if (data[foundRowIndex - 1][statusIdx] === "CANCELLED" || isUpdated) {
-              dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
-                         .setFontLine("none")
-                         .setBackground(isUpdated ? "#fff2cc" : null) // light yellow
-                         .setFontColor(isUpdated ? "#b45f06" : null);
-            }
+
+          if (isWaitlisted) {
+            flightStatus = "WAITLISTED";
+          } else if (oldRow[statusIdx] === "CANCELLED" || oldRow[statusIdx] === "WAITLISTED") {
+            flightStatus = "Active";
+          } else if (changed) {
+            flightStatus = "UPDATED";
           } else {
-            dropoffSheet.appendRow([...updateData, "", ""]);
-          }
-        } else if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
-          dropoffSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
-          dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
-                     .setFontLine("line-through")
-                     .setBackground("#f4cccc") 
-                     .setFontColor("#666666"); 
-        }
-
-        if (dropoffSheet.getLastRow() > 1) {
-           dropoffSheet.getRange(2, 1, dropoffSheet.getLastRow() - 1, dropoffSheet.getLastColumn())
-                      .sort([{column: 6, ascending: true}, {column: 7, ascending: true}, {column: 8, ascending: true}]);
-        }
-      }
-
-      // ----------------------------------------------------
-      // Update Logistics Sheet Logic
-      // ----------------------------------------------------
-      const logisticsSheet = responseSs.getSheetByName("Logistics");
-      if (logisticsSheet) {
-        const logData = logisticsSheet.getDataRange().getValues();
-        const logHeaders = logData[0];
-        
-        let foundRowIndex = -1;
-        let emailColIdx = -1;
-        for(let j = 0; j < logHeaders.length; j++) {
-           if(logHeaders[j] === "Email") {
-              emailColIdx = j;
-              break;
-           }
-        }
-        
-        for (let i = 1; i < logData.length; i++) {
-          const rowEmail = (emailColIdx !== -1) ? logData[i][emailColIdx] : logData[i][2];
-          if (matchesParticipantRecord(logData[i][0], logData[i][1], rowEmail, firstName, lastName, emailRecipient)) {
-            foundRowIndex = i + 1;
-            break;
+            flightStatus = oldRow[statusIdx] || "Active";
           }
         }
 
-        const newRowData = [];
-        let autoColCount = logHeaders.length;
-        if (logHeaders.includes("Room Assignment")) {
-           autoColCount = logHeaders.indexOf("Room Assignment");
-        } else if (logHeaders.includes("Group/Team")) {
-           autoColCount = logHeaders.indexOf("Group/Team");
-        }
-
-        for (let i = 0; i < autoColCount; i++) {
-           const logHeader = logHeaders[i];
-           let mappedValue = "";
-           
-           if (logHeader === "First Name") mappedValue = firstName;
-           else if (logHeader === "Last Name") mappedValue = lastName;
-           else if (logHeader === "Email") mappedValue = emailRecipient;
-           else if (logHeader === "Phone") mappedValue = phone;
-           else {
-               for (const respHeader in responses) {
-                   let hLower = respHeader.toLowerCase();
-                   let val = responses[respHeader][0] || "";
-                   if (logHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
-                   else if (logHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
-                   else if (logHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
-                   else if (logHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
-                   else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
-                   else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
-                   else if (logHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
-                   else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
-                   else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
-                   else if (logHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
-                   else if (logHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
-                   else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
-                   else if (logHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
-                   else if (logHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
-                   else if (logHeader === "Emergency Contact Person" && hLower.includes("emergency contact person")) mappedValue = val;
-                   else if (logHeader === "Emergency Contact Relationship" && hLower.includes("emergency contact relationship")) mappedValue = val;
-                   else if (logHeader === "Emergency Contact Phone" && hLower.includes("emergency contact phone") && !hLower.includes("evening")) mappedValue = formatSheetTextValue(val, true);
-               }
-           }
-           const isPhoneCol = (logHeader === "Phone" || logHeader === "Emergency Contact Phone");
-           newRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
+        let newRowData;
+        if (hasTrainBusCols) {
+          newRowData = [firstName, lastName, emailRecipient, phone, arrDetails, arrDate, arrTime, depCity, arrCity, arrAirline, arrFlight, arrTrainStation, arrCarrier, arrTrainNumber, flightStatus];
+        } else {
+          newRowData = [firstName, lastName, emailRecipient, phone, arrDetails, arrDate, arrTime, depCity, arrCity, arrAirline, arrFlight, flightStatus];
         }
 
         if (foundRowIndex !== -1) {
-           logisticsSheet.getRange(foundRowIndex, 1, 1, autoColCount).setValues([newRowData]);
+          pickupSheet.getRange(foundRowIndex, 1, 1, newRowData.length).setValues([newRowData]);
+          const isCancelled = data[foundRowIndex - 1][statusIdx] === "CANCELLED";
+          const isUpdated = flightStatus === "UPDATED";
+          const isWait = flightStatus === "WAITLISTED";
+          pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
+                     .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+                     .setBackground(isWait ? "#fff7e0" : (isUpdated ? "#fff2cc" : null))
+                     .setFontColor(isWait ? "#b06000" : (isUpdated ? "#b45f06" : null));
         } else {
-           const blankPadding = new Array(logHeaders.length - autoColCount).fill("");
-           logisticsSheet.appendRow([...newRowData, ...blankPadding]);
+          const fullRow = buildFullTransportationRow(data[0], newRowData);
+          pickupSheet.appendRow(fullRow);
+          if (flightStatus === "WAITLISTED") {
+            const lastRow = pickupSheet.getLastRow();
+            pickupSheet.getRange(lastRow, 1, 1, pickupSheet.getLastColumn())
+                       .setBackground("#fff7e0")
+                       .setFontColor("#b06000");
+          }
         }
+      } else if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+        pickupSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
+        pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
+                   .setFontLine("line-through")
+                   .setBackground("#f4cccc")
+                   .setFontColor("#666666");
+      }
 
-        if (logisticsSheet.getLastRow() > 1) {
-           logisticsSheet.getRange(2, 1, logisticsSheet.getLastRow() - 1, logisticsSheet.getLastColumn())
-                         .sort([{column: 2, ascending: true}]);
+      if (pickupSheet.getLastRow() > 1) {
+        pickupSheet.getRange(2, 1, pickupSheet.getLastRow() - 1, pickupSheet.getLastColumn())
+                   .sort([{column: 6, ascending: true}, {column: 7, ascending: true}, {column: 9, ascending: true}]);
+      }
+    }
+
+    // Drop-Off Sheet
+    const dropoffSheet = responseSs.getSheetByName("Drop-Off");
+    if (dropoffSheet) {
+      const data = dropoffSheet.getDataRange().getValues();
+      let foundRowIndex = -1;
+      for (let i = 1; i < data.length; i++) {
+        if (matchesParticipantRecord(data[i][0], data[i][1], data[i][2], firstName, lastName, emailRecipient)) {
+          foundRowIndex = i + 1;
+          break;
         }
       }
 
-      // ----------------------------------------------------
-      // Update Dedicated Lodging Sheet Logic
-      // ----------------------------------------------------
-      const lodgingSheet = responseSs.getSheetByName("Lodging");
-      if (lodgingSheet) {
-        const lodgData = lodgingSheet.getDataRange().getValues();
-        const lodgHeaders = lodgData[0].map(h => String(h).trim());
+      const isFlightDep = depDetails && depDetails.toLowerCase().includes("flight");
+      const isTrainDep = depDetails && (depDetails.toLowerCase().includes("train") || depDetails.toLowerCase().includes("bus"));
+      const needsDropoff = isFlightDep || isTrainDep;
+      const hasTrainBusCols = data[0].some(h => String(h).toLowerCase().includes("train/bus") || String(h).toLowerCase().includes("carrier"));
+      const statusIdx = hasTrainBusCols ? 14 : (data[0][4] && String(data[0][4]).toLowerCase().includes("details") ? 11 : 10);
 
-        let foundLodgRowIndex = -1;
-        const lodgEmailIdx = lodgHeaders.indexOf("Email");
-        for (let i = 1; i < lodgData.length; i++) {
-          const rowEmail = (lodgEmailIdx !== -1) ? lodgData[i][lodgEmailIdx] : lodgData[i][2];
-          if (matchesParticipantRecord(lodgData[i][0], lodgData[i][1], rowEmail, firstName, lastName, emailRecipient)) {
-            foundLodgRowIndex = i + 1;
-            break;
-          }
+      if (isRejected) {
+        if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+          dropoffSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
+          dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
+                     .setFontLine("line-through")
+                     .setBackground("#f4cccc")
+                     .setFontColor("#666666");
         }
-
-        let hasStayingField = false;
-        let stayingVal = "";
-        for (const respHeader in responses) {
-          if (isStayingAtChurchField(respHeader)) {
-            hasStayingField = true;
-            stayingVal = responses[respHeader][0] || "";
-            break;
-          }
-        }
-        const needsLodging = hasStayingField ? isStayingAtChurchResponse(stayingVal) : true;
-        const statusIdx = lodgHeaders.indexOf("Status");
-        let lodgAutoColCount = lodgHeaders.length;
-        if (lodgHeaders.includes("Room Assignment")) {
-          lodgAutoColCount = lodgHeaders.indexOf("Room Assignment");
-        }
-
-        if (needsLodging) {
-          const newLodgRowData = [];
-          for (let i = 0; i < lodgAutoColCount; i++) {
-            const lHeader = lodgHeaders[i];
-            if (lHeader === "Status") {
-              newLodgRowData.push("Active"); // Placeholder, refined below
-              continue;
-            }
-            let mappedValue = "";
-            if (lHeader === "First Name") mappedValue = firstName;
-            else if (lHeader === "Last Name") mappedValue = lastName;
-            else if (lHeader === "Email") mappedValue = emailRecipient;
-            else if (lHeader === "Phone") mappedValue = phone;
-            else {
-              for (const respHeader in responses) {
-                let hLower = respHeader.toLowerCase();
-                let val = responses[respHeader][0] || "";
-                if (lHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
-                else if (lHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
-                else if (lHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
-                else if (lHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
-                else if (lHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
-                else if (lHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
-                else if (lHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
-                else if (lHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
-                else if (lHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
-                else if (lHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
-                else if (lHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
-                else if (lHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
-                else if (lHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
-              }
-            }
-            const isPhoneCol = (lHeader === "Phone");
-            newLodgRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
-          }
-
-          let lodgStatus = "Active";
-          if (foundLodgRowIndex !== -1 && statusIdx !== -1) {
-            const oldRow = lodgData[foundLodgRowIndex - 1];
-            const watchHeaders = ["Lodging Before", "Lodging After", "Exact Lodging Dates", "Sleeping Bag/Pillow", "Sleep Preferences & Habits", "Other Special Needs"];
-            let changed = false;
-            for (const wh of watchHeaders) {
-              const idx = lodgHeaders.indexOf(wh);
-              if (idx !== -1 && idx < lodgAutoColCount) {
-                if (String(oldRow[idx] || "").trim() !== String(newLodgRowData[idx] || "").trim()) {
-                  changed = true;
-                  break;
-                }
-              }
-            }
-            if (oldRow[statusIdx] === "CANCELLED") {
-              lodgStatus = "Active";
-            } else if (changed) {
-              lodgStatus = "UPDATED";
-            } else {
-              lodgStatus = oldRow[statusIdx] || "Active";
-            }
-          }
-          if (statusIdx !== -1 && statusIdx < lodgAutoColCount) {
-            newLodgRowData[statusIdx] = lodgStatus;
-          }
-
-          if (foundLodgRowIndex !== -1) {
-            lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgAutoColCount).setValues([newLodgRowData]);
-            if (statusIdx !== -1 && (lodgData[foundLodgRowIndex - 1][statusIdx] === "CANCELLED" || lodgStatus === "UPDATED")) {
-              lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
-                          .setFontLine("none")
-                          .setBackground(lodgStatus === "UPDATED" ? "#fff2cc" : null)
-                          .setFontColor(lodgStatus === "UPDATED" ? "#b45f06" : null);
-            }
+      } else if (needsDropoff) {
+        let flightStatus = isWaitlisted ? "WAITLISTED" : "Active";
+        if (foundRowIndex !== -1) {
+          const oldRow = data[foundRowIndex - 1];
+          let changed = false;
+          if (hasTrainBusCols) {
+            changed = (
+              oldRow[4] !== depDetails ||
+              String(oldRow[5]) !== String(depDate) ||
+              String(oldRow[6]) !== String(depTime) ||
+              oldRow[7] !== depCityOut ||
+              oldRow[8] !== depAirline ||
+              oldRow[9] !== depFlight ||
+              oldRow[10] !== destCity ||
+              oldRow[11] !== depTrainStation ||
+              oldRow[12] !== depCarrier ||
+              oldRow[13] !== depTrainNumber
+            );
           } else {
-            const manualColCount = lodgHeaders.length - lodgAutoColCount;
-            const manualPadding = new Array(manualColCount).fill("");
-            const bldgOffset = lodgHeaders.indexOf("Building") - lodgAutoColCount;
-            if (bldgOffset >= 0 && bldgOffset < manualPadding.length) {
-              manualPadding[bldgOffset] = getBuildingLookupFormula();
-            }
-            lodgingSheet.appendRow([...newLodgRowData, ...manualPadding]);
+            let hasDepDetails = data[0][4] && String(data[0][4]).toLowerCase().includes("details");
+            changed = hasDepDetails
+              ? (oldRow[4] !== depDetails || String(oldRow[5]) !== String(depDate) || String(oldRow[6]) !== String(depTime) || oldRow[7] !== depCityOut || oldRow[8] !== depAirline || oldRow[9] !== depFlight || oldRow[10] !== destCity)
+              : (String(oldRow[4]) !== String(depDate) || String(oldRow[5]) !== String(depTime) || oldRow[6] !== depCityOut || oldRow[7] !== depAirline || oldRow[8] !== depFlight || oldRow[9] !== destCity);
           }
-        } else if (foundLodgRowIndex !== -1 && statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] !== "CANCELLED") {
+
+          if (isWaitlisted) {
+            flightStatus = "WAITLISTED";
+          } else if (oldRow[statusIdx] === "CANCELLED" || oldRow[statusIdx] === "WAITLISTED") {
+            flightStatus = "Active";
+          } else if (changed) {
+            let ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yy h:mm a");
+            flightStatus = "Updated " + ts;
+          } else {
+            flightStatus = oldRow[statusIdx] || "Active";
+          }
+        }
+
+        let updateData;
+        if (hasTrainBusCols) {
+          updateData = [firstName, lastName, emailRecipient, phone, depDetails, depDate, depTime, depCityOut, depAirline, depFlight, destCity, depTrainStation, depCarrier, depTrainNumber, flightStatus];
+        } else {
+          let hasDepDetails = data[0][4] && String(data[0][4]).toLowerCase().includes("details");
+          updateData = hasDepDetails ? 
+            [firstName, lastName, emailRecipient, phone, depDetails, depDate, depTime, depCityOut, depAirline, depFlight, destCity, flightStatus] :
+            [firstName, lastName, emailRecipient, phone, depDate, depTime, depCityOut, depAirline, depFlight, destCity, flightStatus];
+        }
+
+        if (foundRowIndex !== -1) {
+          dropoffSheet.getRange(foundRowIndex, 1, 1, updateData.length).setValues([updateData]);
+          const isCancelled = data[foundRowIndex - 1][statusIdx] === "CANCELLED";
+          const isUpdated = String(flightStatus).startsWith("Updated");
+          const isWait = flightStatus === "WAITLISTED";
+          dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
+                     .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+                     .setBackground(isWait ? "#fff7e0" : (isUpdated ? "#fff2cc" : null))
+                     .setFontColor(isWait ? "#b06000" : (isUpdated ? "#b45f06" : null));
+        } else {
+          const fullRow = buildFullTransportationRow(data[0], updateData);
+          dropoffSheet.appendRow(fullRow);
+          if (flightStatus === "WAITLISTED") {
+            const lastRow = dropoffSheet.getLastRow();
+            dropoffSheet.getRange(lastRow, 1, 1, dropoffSheet.getLastColumn())
+                       .setBackground("#fff7e0")
+                       .setFontColor("#b06000");
+          }
+        }
+      } else if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+        dropoffSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
+        dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
+                   .setFontLine("line-through")
+                   .setBackground("#f4cccc") 
+                   .setFontColor("#666666"); 
+      }
+
+      if (dropoffSheet.getLastRow() > 1) {
+        dropoffSheet.getRange(2, 1, dropoffSheet.getLastRow() - 1, dropoffSheet.getLastColumn())
+                   .sort([{column: 6, ascending: true}, {column: 7, ascending: true}, {column: 8, ascending: true}]);
+      }
+    }
+
+    // Logistics Sheet
+    const logisticsSheet = responseSs.getSheetByName("Logistics");
+    if (logisticsSheet) {
+      const logData = logisticsSheet.getDataRange().getValues();
+      const logHeaders = logData[0];
+      
+      let foundRowIndex = -1;
+      let emailColIdx = -1;
+      for(let j = 0; j < logHeaders.length; j++) {
+         if(logHeaders[j] === "Email") {
+            emailColIdx = j;
+            break;
+         }
+      }
+      
+      for (let i = 1; i < logData.length; i++) {
+        const rowEmail = (emailColIdx !== -1) ? logData[i][emailColIdx] : logData[i][2];
+        if (matchesParticipantRecord(logData[i][0], logData[i][1], rowEmail, firstName, lastName, emailRecipient)) {
+          foundRowIndex = i + 1;
+          break;
+        }
+      }
+
+      const newRowData = [];
+      let autoColCount = logHeaders.length;
+      if (logHeaders.includes("Room Assignment")) {
+         autoColCount = logHeaders.indexOf("Room Assignment");
+      } else if (logHeaders.includes("Group/Team")) {
+         autoColCount = logHeaders.indexOf("Group/Team");
+      }
+
+      for (let i = 0; i < autoColCount; i++) {
+         const logHeader = logHeaders[i];
+         let mappedValue = "";
+         
+         if (logHeader === "First Name") mappedValue = firstName;
+         else if (logHeader === "Last Name") mappedValue = lastName;
+         else if (logHeader === "Email") mappedValue = emailRecipient;
+         else if (logHeader === "Phone") mappedValue = phone;
+         else {
+             for (const respHeader in responses) {
+                 let hLower = respHeader.toLowerCase();
+                 let val = responses[respHeader][0] || "";
+                 if (logHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
+                 else if (logHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
+                 else if (logHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
+                 else if (logHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
+                 else if (logHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
+                 else if (logHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
+                 else if (logHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
+                 else if (logHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
+                 else if (logHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
+                 else if (logHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
+                 else if (logHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
+                 else if (logHeader === "Food/Medicine Restrictions" && hLower.includes("food/medicine")) mappedValue = val;
+                 else if (logHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
+                 else if (logHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
+                 else if (logHeader === "Emergency Contact Person" && hLower.includes("emergency contact person")) mappedValue = val;
+                 else if (logHeader === "Emergency Contact Relationship" && hLower.includes("emergency contact relationship")) mappedValue = val;
+                 else if (logHeader === "Emergency Contact Phone" && hLower.includes("emergency contact phone") && !hLower.includes("evening")) mappedValue = formatSheetTextValue(val, true);
+             }
+         }
+         const isPhoneCol = (logHeader === "Phone" || logHeader === "Emergency Contact Phone");
+         newRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
+      }
+
+      if (foundRowIndex !== -1) {
+         logisticsSheet.getRange(foundRowIndex, 1, 1, autoColCount).setValues([newRowData]);
+      } else {
+         const blankPadding = new Array(logHeaders.length - autoColCount).fill("");
+         logisticsSheet.appendRow([...newRowData, ...blankPadding]);
+      }
+
+      if (logisticsSheet.getLastRow() > 1) {
+         logisticsSheet.getRange(2, 1, logisticsSheet.getLastRow() - 1, logisticsSheet.getLastColumn())
+                       .sort([{column: 2, ascending: true}]);
+      }
+    }
+
+    // Lodging Sheet
+    const lodgingSheet = responseSs.getSheetByName("Lodging");
+    if (lodgingSheet) {
+      const lodgData = lodgingSheet.getDataRange().getValues();
+      const lodgHeaders = lodgData[0].map(h => String(h).trim());
+
+      let foundLodgRowIndex = -1;
+      const lodgEmailIdx = lodgHeaders.indexOf("Email");
+      for (let i = 1; i < lodgData.length; i++) {
+        const rowEmail = (lodgEmailIdx !== -1) ? lodgData[i][lodgEmailIdx] : lodgData[i][2];
+        if (matchesParticipantRecord(lodgData[i][0], lodgData[i][1], rowEmail, firstName, lastName, emailRecipient)) {
+          foundLodgRowIndex = i + 1;
+          break;
+        }
+      }
+
+      let hasStayingField = false;
+      let stayingVal = "";
+      for (const respHeader in responses) {
+        if (isStayingAtChurchField(respHeader)) {
+          hasStayingField = true;
+          stayingVal = responses[respHeader][0] || "";
+          break;
+        }
+      }
+      const needsLodging = hasStayingField ? isStayingAtChurchResponse(stayingVal) : true;
+      const statusIdx = lodgHeaders.indexOf("Status");
+      let lodgAutoColCount = lodgHeaders.length;
+      if (lodgHeaders.includes("Room Assignment")) {
+        lodgAutoColCount = lodgHeaders.indexOf("Room Assignment");
+      }
+
+      if (isRejected) {
+        if (foundLodgRowIndex !== -1 && statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] !== "CANCELLED") {
           lodgingSheet.getRange(foundLodgRowIndex, statusIdx + 1).setValue("CANCELLED");
           lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
                       .setFontLine("line-through")
                       .setBackground("#f4cccc")
                       .setFontColor("#666666");
         }
-
-        if (lodgingSheet.getLastRow() > 1) {
-          lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn())
-                      .sort([{column: 2, ascending: true}]);
+      } else if (needsLodging) {
+        const newLodgRowData = [];
+        for (let i = 0; i < lodgAutoColCount; i++) {
+          const lHeader = lodgHeaders[i];
+          if (lHeader === "Status") {
+            newLodgRowData.push(isWaitlisted ? "WAITLISTED" : "Active");
+            continue;
+          }
+          let mappedValue = "";
+          if (lHeader === "First Name") mappedValue = firstName;
+          else if (lHeader === "Last Name") mappedValue = lastName;
+          else if (lHeader === "Email") mappedValue = emailRecipient;
+          else if (lHeader === "Phone") mappedValue = phone;
+          else {
+            for (const respHeader in responses) {
+              let hLower = respHeader.toLowerCase();
+              let val = responses[respHeader][0] || "";
+              if (lHeader === "Gender" && hLower.startsWith("gender")) mappedValue = val;
+              else if (lHeader === "Age" && (hLower === "age" || (hLower.startsWith("age") && !hLower.includes("group")))) mappedValue = val;
+              else if (lHeader === "Parent/Guardian" && hLower.includes("parent/guardian") && !hLower.includes("signature")) mappedValue = val;
+              else if (lHeader === "Grade" && hLower.startsWith("grade")) mappedValue = val;
+              else if (lHeader === "Age Group" && hLower.includes("age group")) mappedValue = val;
+              else if (lHeader === "Local Church/Place of Worship" && (hLower.includes("local church") || hLower.includes("fellowship"))) mappedValue = val;
+              else if (lHeader === "Staying at Host Church?" && isStayingAtChurchField(respHeader)) mappedValue = val;
+              else if (lHeader === "Lodging Before" && hLower.includes("lodging before")) mappedValue = val;
+              else if (lHeader === "Lodging After" && hLower.includes("lodging after")) mappedValue = val;
+              else if (lHeader === "Exact Lodging Dates" && (hLower.includes("exact dates") || hLower.includes("exact lodging dates"))) mappedValue = val;
+              else if (lHeader === "Sleeping Bag/Pillow" && (hLower.includes("sleeping bag") || hLower.includes("pillow"))) mappedValue = val;
+              else if (lHeader === "Sleep Preferences & Habits" && hLower.includes("sleep preferences")) mappedValue = val;
+              else if (lHeader === "Other Special Needs" && hLower.includes("other special needs")) mappedValue = val;
+            }
+          }
+          const isPhoneCol = (lHeader === "Phone");
+          newLodgRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
         }
+
+        let lodgStatus = isWaitlisted ? "WAITLISTED" : "Active";
+        if (foundLodgRowIndex !== -1 && statusIdx !== -1) {
+          const oldRow = lodgData[foundLodgRowIndex - 1];
+          const watchHeaders = ["Lodging Before", "Lodging After", "Exact Lodging Dates", "Sleeping Bag/Pillow", "Sleep Preferences & Habits", "Other Special Needs"];
+          let changed = false;
+          for (const wh of watchHeaders) {
+            const idx = lodgHeaders.indexOf(wh);
+            if (idx !== -1 && idx < lodgAutoColCount) {
+              if (String(oldRow[idx] || "").trim() !== String(newLodgRowData[idx] || "").trim()) {
+                changed = true;
+                break;
+              }
+            }
+          }
+          if (isWaitlisted) {
+            lodgStatus = "WAITLISTED";
+          } else if (oldRow[statusIdx] === "CANCELLED" || oldRow[statusIdx] === "WAITLISTED") {
+            lodgStatus = "Active";
+          } else if (changed) {
+            lodgStatus = "UPDATED";
+          } else {
+            lodgStatus = oldRow[statusIdx] || "Active";
+          }
+        }
+        if (statusIdx !== -1 && statusIdx < lodgAutoColCount) {
+          newLodgRowData[statusIdx] = lodgStatus;
+        }
+
+        if (foundLodgRowIndex !== -1) {
+          lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgAutoColCount).setValues([newLodgRowData]);
+          const isCancelled = statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] === "CANCELLED";
+          const isUpdated = lodgStatus === "UPDATED";
+          const isWait = lodgStatus === "WAITLISTED";
+          lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
+                      .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+                      .setBackground(isWait ? "#fff7e0" : (isUpdated ? "#fff2cc" : null))
+                      .setFontColor(isWait ? "#b06000" : (isUpdated ? "#b45f06" : null));
+        } else {
+          const manualColCount = lodgHeaders.length - lodgAutoColCount;
+          const manualPadding = new Array(manualColCount).fill("");
+          const bldgOffset = lodgHeaders.indexOf("Building") - lodgAutoColCount;
+          if (bldgOffset >= 0 && bldgOffset < manualPadding.length) {
+            manualPadding[bldgOffset] = getBuildingLookupFormula();
+          }
+          lodgingSheet.appendRow([...newLodgRowData, ...manualPadding]);
+          if (lodgStatus === "WAITLISTED") {
+            const lastRow = lodgingSheet.getLastRow();
+            lodgingSheet.getRange(lastRow, 1, 1, lodgingSheet.getLastColumn())
+                        .setBackground("#fff7e0")
+                        .setFontColor("#b06000");
+          }
+        }
+      } else if (foundLodgRowIndex !== -1 && statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] !== "CANCELLED") {
+        lodgingSheet.getRange(foundLodgRowIndex, statusIdx + 1).setValue("CANCELLED");
+        lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
+                    .setFontLine("line-through")
+                    .setBackground("#f4cccc")
+                    .setFontColor("#666666");
       }
 
-      // Automatically sync with Public Transport Sheet if configured (Option C: Transit-filtered fast-path)
+      if (lodgingSheet.getLastRow() > 1) {
+        lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn())
+                    .sort([{column: 2, ascending: true}]);
+      }
+    }
+
+    // Public transport sync only for confirmed, non-rejected registrants
+    if (!isRejected && !isWaitlisted) {
       try {
         if (typeof getTransportationSettings === "function" && typeof syncTransportation === "function") {
           const isFlightArr = arrDetails && arrDetails.toLowerCase().includes("flight");
@@ -3117,100 +3312,40 @@ function masterRespondToRegistration(e) {
       } catch (tErr) {
         Logger.log("Automated public transportation sync deferred/skipped: " + tErr.message);
       }
-
-    } catch(err) {
-      Logger.log("Error processing transportation/logistics/lodging sync: " + err.message);
     }
 
-    let isWaitlisted = false;
-    let maxAttendees = null;
-    try {
-      const props = PropertiesService.getScriptProperties();
-      const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
-      const formUrl = sheet.getFormUrl();
-      if (formUrl) {
-        const formId = FormApp.openByUrl(formUrl).getId();
-        if (formsToMonitor[formId] && formsToMonitor[formId].max) {
-          maxAttendees = formsToMonitor[formId].max;
-          
-          if (!isRejected) {
-            const currentRow = e.range.getRow();
-            const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-            const statusColIdx = headers.indexOf("Email Status") + 1;
-            let existingStatus = "";
-            if (statusColIdx > 0 && currentRow <= sheet.getLastRow()) {
-              existingStatus = String(sheet.getRange(currentRow, statusColIdx).getValue() || "").trim();
-            }
-
-            if (existingStatus.includes("Confirmation")) {
-              // Retains confirmed status on edit
-              isWaitlisted = false;
-            } else if (existingStatus.includes("Waitlist")) {
-              // Retains waitlisted status on edit
-              isWaitlisted = true;
-            } else {
-              // New submission: calculate confirmed attendees prior to this row
-              // Only count valid, non-rejected, non-waitlisted participants
-              let confirmedCount = 0;
-              const medColIdx = headers.findIndex(h => {
-                const s = String(h).toLowerCase();
-                return s.includes("medical consent") || s.includes("liability release");
-              }) + 1;
-
-              if (currentRow > 2) {
-                const priorStatuses = statusColIdx > 0 
-                  ? sheet.getRange(2, statusColIdx, currentRow - 2, 1).getValues() 
-                  : [];
-                const priorConsents = medColIdx > 0
-                  ? sheet.getRange(2, medColIdx, currentRow - 2, 1).getValues()
-                  : [];
-
-                for (let r = 0; r < currentRow - 2; r++) {
-                  const stat = priorStatuses[r] ? String(priorStatuses[r][0]) : "";
-                  const med = priorConsents[r] ? String(priorConsents[r][0]).toLowerCase().trim() : "";
-                  
-                  // Ignore if rejected by medical consent or status
-                  if (med.startsWith("no") || stat.startsWith("Rejected")) {
-                    continue;
-                  }
-                  // Ignore if already marked as waitlisted
-                  if (stat.startsWith("Waitlist")) {
-                    continue;
-                  }
-                  confirmedCount++;
-                }
-              }
-
-              if (confirmedCount >= maxAttendees) {
-                isWaitlisted = true;
-              }
-            }
-          }
-        }
-      }
-    } catch(err) {
-       Logger.log("Error checking waitlist: " + err.message);
+    SpreadsheetApp.flush();
+  } catch (err) {
+    Logger.log("Error in masterRespondToRegistration sheet processing: " + err.message);
+  } finally {
+    if (lock.hasLock()) {
+      lock.releaseLock();
     }
+  }
 
-    const row = e.range.getRow();
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    let statusColIndex = headers.indexOf("Email Status") + 1;
-    let isEdit = false;
-    
-    if (statusColIndex > 0) {
-      const existingStatus = sheet.getRange(row, statusColIndex).getValue();
-      if (existingStatus && existingStatus !== "") {
-        isEdit = true;
-      }
-    }
-    
+  // ----------------------------------------------------
+  // Outside Lock: Fetch edit response URL and send email
+  // ----------------------------------------------------
+  try {
     let subject = isEdit ? `Update Confirmation: ${settings.EventName} Registration` : `Confirmation: ${settings.EventName} Registration`;
     if (isRejected) {
       subject = `Registration Not Accepted for ${settings.EventName}`;
     } else if (isWaitlisted) {
       subject = isEdit ? `Update Waitlist: ${settings.EventName} Registration` : `Waitlist: ${settings.EventName} Registration`;
     }
-    
+
+    const commonStyles = `style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50;"`;
+    const signature = `<p ${commonStyles}>In Christ,<br><span style="color: #2980b9; font-weight: bold;">${settings.OrgName}</span></p>`;
+
+    let logoBlob = null;
+    let logoHtml = "";
+    try {
+      logoBlob = DriveApp.getFileById("1KltAMA0tXmJeeam2pg_omUjMvD5_un-d").getBlob();
+      logoHtml = `<img src="cid:usgaLogo" alt="${settings.OrgName} Logo" style="max-width: 150px; height: auto; margin-bottom: 20px;">`;
+    } catch (err) {
+      Logger.log("Could not load logo: " + err.message);
+    }
+
     const rejectionContent = `
       <h2 style="color: #c0392b;">Registration Not Accepted</h2>
       <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
@@ -3234,7 +3369,6 @@ function masterRespondToRegistration(e) {
     else if (isWaitlisted) bodyContent = waitlistContent;
 
     let form;
-    let editResponseUrl = "";
     try {
       const formUrl = responseSs.getFormUrl();
       form = FormApp.openByUrl(formUrl);
@@ -3244,17 +3378,30 @@ function masterRespondToRegistration(e) {
         const formResponse = formResponses[i];
         const formEmail = formResponse.getRespondentEmail() || "";
         let typedEmail = "";
+        let respFirstName = "";
+        let respLastName = "";
         
         const itemResponses = formResponse.getItemResponses();
         for (let j = 0; j < itemResponses.length; j++) {
           const itemTitle = itemResponses[j].getItem().getTitle().toLowerCase();
+          const respVal = String(itemResponses[j].getResponse() || "").trim();
           if (itemTitle.includes("email") && !itemTitle.includes("minor")) {
-            typedEmail = itemResponses[j].getResponse();
+            typedEmail = respVal;
+          }
+          if (itemTitle.includes("first name")) {
+            respFirstName = respVal;
+          }
+          if (itemTitle.includes("last name")) {
+            respLastName = respVal;
           }
         }
         
-        if ((formEmail && formEmail.toLowerCase() === emailRecipient.toLowerCase()) || 
-            (typedEmail && typedEmail.toLowerCase() === emailRecipient.toLowerCase())) {
+        const emailMatches = (formEmail && formEmail.toLowerCase() === emailRecipient.toLowerCase()) || 
+                             (typedEmail && typedEmail.toLowerCase() === emailRecipient.toLowerCase());
+        const nameMatches = (!respFirstName || !firstName || respFirstName.toLowerCase() === firstName.toLowerCase()) &&
+                            (!respLastName || !lastName || respLastName.toLowerCase() === lastName.toLowerCase());
+
+        if (emailMatches && nameMatches) {
           editResponseUrl = formResponse.getEditResponseUrl();
           break; 
         }
@@ -3408,15 +3555,11 @@ function masterRespondToRegistration(e) {
       }
     }
 
-    if (statusColIndex === 0) {
-      statusColIndex = headers.length + 1;
-      sheet.getRange(1, statusColIndex).setValue("Email Status").setFontWeight("bold");
+    if (sheet && row > 0 && statusColIndex > 0) {
+      sheet.getRange(row, statusColIndex).setValue(statusText);
     }
-
-    sheet.getRange(row, statusColIndex).setValue(statusText);
-    
-  } catch (error) {
-    Logger.log("Registration Response Handler Error: " + error.message);
+  } catch (outerErr) {
+    Logger.log("masterRespondToRegistration post-processing error: " + outerErr.message);
   }
 }
 
@@ -4239,6 +4382,31 @@ function masterFormLifecycleCron() {
           config.isAutoClosed = true;
         }
 
+        // Trigger Quota Management [V2.9.2]: Auto-release onFormSubmit triggers 14 days after registration closes
+        // to prevent exceeding the Apps Script limit of 20 project triggers
+        const triggerReleaseThreshold = config.end ? (config.end + 14 * 24 * 60 * 60 * 1000) : null;
+        if (triggerReleaseThreshold && now > triggerReleaseThreshold && !config.triggerReleased) {
+          let targetSheetId = config.sheetId;
+          if (!targetSheetId) {
+            try { targetSheetId = form.getDestinationId(); } catch(e) {}
+          }
+          if (targetSheetId) {
+            for (let i = 0; i < allTriggers.length; i++) {
+              const trig = allTriggers[i];
+              if (trig.getHandlerFunction() === 'masterRespondToRegistration' && trig.getTriggerSourceId() === targetSheetId) {
+                try {
+                  ScriptApp.deleteTrigger(trig);
+                  Logger.log(`Auto-released trigger for past event spreadsheet ${targetSheetId}`);
+                } catch(trigErr) {
+                  Logger.log(`Error releasing trigger: ${trigErr.message}`);
+                }
+              }
+            }
+          }
+          config.triggerReleased = true;
+          changed = true;
+        }
+
         const isAccepting = form.isAcceptingResponses();
         let shouldAccept = true;
         
@@ -4536,6 +4704,8 @@ function upgradeExistingSheet() {
 
   // 4. Create Pickup & Drop-Off Sheets
   const { pickupSheet, dropoffSheet } = setupTransportationSheets(ss);
+  const pickupHeaders = pickupSheet.getRange(1, 1, 1, pickupSheet.getLastColumn()).getValues()[0];
+  const dropoffHeaders = dropoffSheet.getRange(1, 1, 1, dropoffSheet.getLastColumn()).getValues()[0];
 
   // 5. Create Streamlined Logistics Sheet
   const logisticsSheet = setupLogisticsSheet(ss, selectedNames);
@@ -4551,6 +4721,10 @@ function upgradeExistingSheet() {
 
   // 7. Loop through all responses and run masterRespondToRegistration-style logic
   const responseData = responsesSheet.getDataRange().getDisplayValues();
+  const pickupRows = [];
+  const dropoffRows = [];
+  const logisticsRows = [];
+  const lodgingRows = [];
   
   const syncResponses = (headersRow, rowData) => {
       const responses = {};
@@ -4607,7 +4781,7 @@ function upgradeExistingSheet() {
       const isTrainArr = arrDetails && (arrDetails.toLowerCase().includes("train") || arrDetails.toLowerCase().includes("bus"));
       if (isFlightArr || isTrainArr) {
           const newRowData = [firstName, lastName, emailRecipient, phone, arrDetails, arrDate, arrTime, depCity, arrCity, arrAirline, arrFlight, arrTrainStation, arrCarrier, arrTrainNumber, "Active", "", ""];
-          pickupSheet.appendRow(newRowData);
+          pickupRows.push(buildFullTransportationRow(pickupHeaders, newRowData, "Unassigned"));
       }
       
       // Drop-Off Sync
@@ -4615,7 +4789,7 @@ function upgradeExistingSheet() {
       const isTrainDep = depDetails && (depDetails.toLowerCase().includes("train") || depDetails.toLowerCase().includes("bus"));
       if (isFlightDep || isTrainDep) {
           const updateData = [firstName, lastName, emailRecipient, phone, depDetails, depDate, depTime, depCityOut, depAirline, depFlight, destCity, depTrainStation, depCarrier, depTrainNumber, "Active", "", ""];
-          dropoffSheet.appendRow(updateData);
+          dropoffRows.push(buildFullTransportationRow(dropoffHeaders, updateData, "Unassigned"));
       }
       
       // Logistics Sync
@@ -4654,7 +4828,7 @@ function upgradeExistingSheet() {
       const keyName = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
       const saved = savedLogisticsData[keyEmail] || savedLogisticsData[keyName] || { room: "", building: "", bedSpot: "", lodgingNotes: "", group: "", notes: "" };
       const manualData = [saved.group || "", saved.notes || ""];
-      logisticsSheet.appendRow([...newLogRowData, ...manualData]);
+      logisticsRows.push([...newLogRowData, ...manualData]);
 
       // Dedicated Lodging Sync (only participants staying at host church)
       if (!stayingAnswer) {
@@ -4701,9 +4875,9 @@ function upgradeExistingSheet() {
           const isPhoneCol = (lHeader === "Phone");
           newLodgRowData.push(formatSheetTextValue(mappedValue, isPhoneCol));
         }
-        const bldgFormulaOrVal = saved.building || getBuildingLookupFormula();
-        const lodgManual = [saved.room || "", bldgFormulaOrVal, saved.bedSpot || "", saved.lodgingNotes || ""];
-        lodgingSheet.appendRow([...newLodgRowData, ...lodgManual]);
+        const bldgCell = getBuildingLookupFormula();
+        const lodgManual = [saved.room || "", bldgCell, saved.bedSpot || "", saved.lodgingNotes || ""];
+        lodgingRows.push([...newLodgRowData, ...lodgManual]);
       }
   };
   
@@ -4712,6 +4886,20 @@ function upgradeExistingSheet() {
     for (let i = 1; i < responseData.length; i++) {
        syncResponses(hRow, responseData[i]);
     }
+  }
+
+  // Batch write all accumulated rows to avoid sequential appendRow quota/timeout limits
+  if (pickupRows.length > 0) {
+    pickupSheet.getRange(2, 1, pickupRows.length, pickupRows[0].length).setValues(pickupRows);
+  }
+  if (dropoffRows.length > 0) {
+    dropoffSheet.getRange(2, 1, dropoffRows.length, dropoffRows[0].length).setValues(dropoffRows);
+  }
+  if (logisticsRows.length > 0) {
+    logisticsSheet.getRange(2, 1, logisticsRows.length, logisticsRows[0].length).setValues(logisticsRows);
+  }
+  if (lodgingRows.length > 0) {
+    lodgingSheet.getRange(2, 1, lodgingRows.length, lodgingRows[0].length).setValues(lodgingRows);
   }
   
   // Sort
@@ -4867,6 +5055,7 @@ function syncLodgingAndRoomsForSheet(targetSs) {
 
   let lodgingCount = 0;
   let migratedRoomCount = 0;
+  const lodgRows = [];
 
   if (respData.length > 1) {
     const hRow = respData[0];
@@ -4935,9 +5124,13 @@ function syncLodgingAndRoomsForSheet(targetSs) {
       if (saved.room) migratedRoomCount++;
 
       const bldgCell = getBuildingLookupFormula();
-      lodgingSheet.appendRow([...newLodgRowData, saved.room || "", bldgCell, saved.bedSpot || "", saved.lodgingNotes || ""]);
+      lodgRows.push([...newLodgRowData, saved.room || "", bldgCell, saved.bedSpot || "", saved.lodgingNotes || ""]);
       lodgingCount++;
     }
+  }
+
+  if (lodgRows.length > 0) {
+    lodgingSheet.getRange(2, 1, lodgRows.length, lodgRows[0].length).setValues(lodgRows);
   }
 
   if (lodgingSheet.getLastRow() > 1) {
@@ -5434,6 +5627,29 @@ function doPost(e) {
       throw new Error("Invalid request: No payload received.");
     }
     const payload = JSON.parse(e.postData.contents);
+
+    // Web App Security Check [V2.9.2]: Verify caller authorization
+    const props = PropertiesService.getScriptProperties();
+    const sharedSecret = props.getProperty('WEB_APP_SECRET_TOKEN');
+    const allowedDomain = props.getProperty('ALLOWED_EMAIL_DOMAIN') || '@tjc.org';
+    
+    if (sharedSecret) {
+      const incomingSecret = (e.parameter && e.parameter.token) || payload.secretToken;
+      if (incomingSecret !== sharedSecret) {
+        throw new Error("Unauthorized: Invalid secret token.");
+      }
+    }
+    
+    const coordEmail = String(payload.coordinatorEmail || "").trim().toLowerCase();
+    if (!coordEmail) {
+      throw new Error("Unauthorized: Coordinator email is missing.");
+    }
+    
+    const allowedDomainClean = allowedDomain.startsWith('@') ? allowedDomain.toLowerCase() : ('@' + allowedDomain.toLowerCase());
+    if (!coordEmail.endsWith(allowedDomainClean)) {
+      throw new Error(`Unauthorized: Coordinator email (${coordEmail}) must belong to ${allowedDomainClean}`);
+    }
+
     payload.isDelegatedExecution = true;
     const result = generateForm(payload);
     return ContentService.createTextOutput(JSON.stringify({

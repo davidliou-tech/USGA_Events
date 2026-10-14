@@ -170,7 +170,7 @@
       <div style="font-size: 10px; color: #666; margin-top: 2px;">A Google Maps link will be automatically generated.</div>
     </div>
     <div class="form-group">
-      <label>Event Dates</label>
+      <label>Event Dates <span class="tz-label" style="font-size: 11px; font-weight: normal; color: #5f6368;"></span></label>
       <div style="display: flex; gap: 10px;">
         <div style="flex: 1;">
           <div style="font-size: 10px; color: #666; margin-bottom: 2px;">Start Date & Time</div>
@@ -216,12 +216,12 @@
     
     <h2>Registration Information</h2>
     <div class="form-group">
-      <label for="f_regStartDate">Registration Start Date</label>
+      <label for="f_regStartDate">Registration Start Date <span class="tz-label" style="font-size: 11px; font-weight: normal; color: #5f6368;"></span></label>
       <input type="datetime-local" id="f_regStartDate" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
       <div style="font-size: 10px; color: #666; margin-top: 2px;">Defaults to 12:01 AM of selected date.</div>
     </div>
     <div class="form-group">
-      <label for="f_regEndDate">Registration End Date (Deadline)</label>
+      <label for="f_regEndDate">Registration End Date (Deadline) <span class="tz-label" style="font-size: 11px; font-weight: normal; color: #5f6368;"></span></label>
       <input type="datetime-local" id="f_regEndDate" style="width: 100%; padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px;">
       <div style="font-size: 10px; color: #666; margin-top: 2px;">Defaults to 11:59 PM on the day before the event starts.</div>
     </div>
@@ -409,6 +409,16 @@
 
       // Auto-fill year
       document.getElementById('f_year').value = new Date().getFullYear();
+
+      // Display active timezone next to date pickers
+      try {
+        const userTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (userTz) {
+          document.querySelectorAll('.tz-label').forEach(el => {
+            el.textContent = `(${userTz})`;
+          });
+        }
+      } catch (e) {}
 
       // Dynamic Date Defaults & Auto-Time Logic
       const regStartInput = document.getElementById('f_regStartDate');

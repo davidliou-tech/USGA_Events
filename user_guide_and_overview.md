@@ -48,8 +48,8 @@ Follow these five steps in the Form Generator to create a complete registration 
 
 * **Step 3: Set Dates and Capacity**
   * **Event Dates:** Enter the official Start and End dates for the event.
-  * **Registration Window:** Set the dates and times when registration should automatically open and close.
-  * **Max Attendees:** Enter the maximum capacity limit for your event.
+  * **Registration Window:** Set the dates and times when registration should automatically open and close. Active local browser timezone labels (e.g., `America/Los_Angeles`, `America/New_York`) are displayed alongside each date/time field to prevent cross-timezone scheduling confusion.
+  * **Max Attendees:** Enter the maximum capacity limit for your event. Attendees who register after capacity is reached are placed on the Waitlist and held off active room and transportation rosters until promoted. Attendees who decline the Medical Consent & Liability Release are rejected and do not consume event capacity.
 
 * **Step 4: Choose Form Questions**
   * The generator pre-selects recommended fields based on your chosen template.
