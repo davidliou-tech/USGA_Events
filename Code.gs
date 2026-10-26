@@ -3327,11 +3327,17 @@ function masterRespondToRegistration(e) {
   // Outside Lock: Fetch edit response URL and send email
   // ----------------------------------------------------
   try {
-    let subject = isEdit ? `Update Confirmation: ${settings.EventName} Registration` : `Confirmation: ${settings.EventName} Registration`;
+    const rawEventName = (settings.EventName || "USGA Event").trim();
+    // Strip trailing "Registration" or "Registration Form" to obtain the core event name
+    const cleanEventName = rawEventName.replace(/\s+(?:registration(?:\s+form)?|form)$/i, "").trim() || rawEventName;
+    // Ensure "Registration" is appended exactly once for confirmation/waitlist subject lines
+    const eventRegTitle = /\bregistration$/i.test(rawEventName) ? rawEventName : `${cleanEventName} Registration`;
+
+    let subject = isEdit ? `Update Confirmation: ${eventRegTitle}` : `Confirmation: ${eventRegTitle}`;
     if (isRejected) {
-      subject = `Registration Not Accepted for ${settings.EventName}`;
+      subject = `Registration Not Accepted for ${cleanEventName}`;
     } else if (isWaitlisted) {
-      subject = isEdit ? `Update Waitlist: ${settings.EventName} Registration` : `Waitlist: ${settings.EventName} Registration`;
+      subject = isEdit ? `Update Waitlist: ${eventRegTitle}` : `Waitlist: ${eventRegTitle}`;
     }
 
     const commonStyles = `style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50;"`;
@@ -3348,19 +3354,19 @@ function masterRespondToRegistration(e) {
 
     const rejectionContent = `
       <h2 style="color: #c0392b;">Registration Not Accepted</h2>
-      <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
+      <p>Thank you for your interest in the <strong>${cleanEventName}</strong>.</p>
       <p>However, because you selected <strong>'No'</strong> for the <em>Medical Consent and Liability Release</em>, we cannot process your registration at this time.</p>
       <p>Participation requires a signed release for safety and insurance purposes. If this was a mistake, please resubmit the form or contact the coordinators.</p>`;
 
     const editNotice = isEdit ? `<p><em style="color: #e67e22;"><strong>Note:</strong> This is an update to your existing registration.</em></p>` : "";
     const successContent = `
       ${editNotice}
-      <p>Hallelujah! This email confirms that we have successfully received your registration for the <strong>${settings.EventName}</strong>.</p>
+      <p>Hallelujah! This email confirms that we have successfully received your registration for the <strong>${cleanEventName}</strong>.</p>
       <p>We look forward to seeing you! Keep an eye on your inbox for further updates regarding schedules and logistics.</p>`;
 
     const waitlistContent = `
       <h2 style="color: #e67e22;">You're on the Waitlist</h2>
-      <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
+      <p>Thank you for your interest in the <strong>${cleanEventName}</strong>.</p>
       <p>At this time, we have reached the maximum capacity of <strong>${maxAttendees}</strong> attendees for this event, so your registration has been placed on the waitlist.</p>
       <p>If a spot opens up, the coordinators will contact you directly to confirm your attendance. Thank you for your patience and understanding!</p>`;
 
@@ -3579,6 +3585,9 @@ function testEmailVersions() {
     settingsData.forEach(row => { settings[row[0]] = row[1]; });
   }
 
+  const rawEventName = (settings.EventName || "Sample USGA Event").trim();
+  const cleanEventName = rawEventName.replace(/\s+(?:registration(?:\s+form)?|form)$/i, "").trim() || rawEventName;
+
   let logoBlob = null;
   let logoHtml = "";
   try {
@@ -3593,17 +3602,17 @@ function testEmailVersions() {
 
   const rejectionContent = `
     <h2 style="color: #c0392b;">Registration Not Processed</h2>
-    <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
+    <p>Thank you for your interest in the <strong>${cleanEventName}</strong>.</p>
     <p>However, because you selected <strong>'No'</strong> for the <u>Medical Consent and Liability Release</u>, we are unable to process your registration at this time.</p>
     <p>For safety and insurance purposes, participation requires this signed release. If this was a mistake, please resubmit the form or contact the coordinators.</p>`;
 
   const successContent = `
-    <p>Hallelujah! This email confirms that we have successfully received your registration for the <strong>${settings.EventName}</strong>.</p>
+    <p>Hallelujah! This email confirms that we have successfully received your registration for the <strong>${cleanEventName}</strong>.</p>
     <p>We look forward to seeing you! Keep an eye on your inbox for further updates regarding schedules and travel.</p>`;
 
   const waitlistContent = `
     <h2 style="color: #e67e22;">You're on the Waitlist</h2>
-    <p>Thank you for your interest in the <strong>${settings.EventName}</strong>.</p>
+    <p>Thank you for your interest in the <strong>${cleanEventName}</strong>.</p>
     <p>At this time, we have reached the maximum capacity of attendees for this event, so your registration has been placed on the waitlist.</p>
     <p>If a spot opens up, the coordinators will contact you directly to confirm your attendance. Thank you for your patience and understanding!</p>`;
 
@@ -3616,11 +3625,11 @@ function testEmailVersions() {
   
   try {
     successOptions.from = "us.events@tjc.org";
-    GmailApp.sendEmail(testEmail, `TEST: Confirmation for ${settings.EventName}`, "", successOptions);
+    GmailApp.sendEmail(testEmail, `TEST: Confirmation for ${cleanEventName}`, "", successOptions);
   } catch (err) {
     delete successOptions.from;
     successOptions.to = testEmail;
-    successOptions.subject = `TEST: Confirmation for ${settings.EventName}`;
+    successOptions.subject = `TEST: Confirmation for ${cleanEventName}`;
     MailApp.sendEmail(successOptions);
   }
 
@@ -3633,11 +3642,11 @@ function testEmailVersions() {
   
   try {
     rejectionOptions.from = "us.events@tjc.org";
-    GmailApp.sendEmail(testEmail, `TEST: Registration Not Processed for ${settings.EventName}`, "", rejectionOptions);
+    GmailApp.sendEmail(testEmail, `TEST: Registration Not Processed for ${cleanEventName}`, "", rejectionOptions);
   } catch (err) {
     delete rejectionOptions.from;
     rejectionOptions.to = testEmail;
-    rejectionOptions.subject = `TEST: Registration Not Processed for ${settings.EventName}`;
+    rejectionOptions.subject = `TEST: Registration Not Processed for ${cleanEventName}`;
     MailApp.sendEmail(rejectionOptions);
   }
 
@@ -3650,11 +3659,11 @@ function testEmailVersions() {
   
   try {
     waitlistOptions.from = "us.events@tjc.org";
-    GmailApp.sendEmail(testEmail, `TEST: Waitlist for ${settings.EventName}`, "", waitlistOptions);
+    GmailApp.sendEmail(testEmail, `TEST: Waitlist for ${cleanEventName}`, "", waitlistOptions);
   } catch (err) {
     delete waitlistOptions.from;
     waitlistOptions.to = testEmail;
-    waitlistOptions.subject = `TEST: Waitlist for ${settings.EventName}`;
+    waitlistOptions.subject = `TEST: Waitlist for ${cleanEventName}`;
     MailApp.sendEmail(waitlistOptions);
   }
 

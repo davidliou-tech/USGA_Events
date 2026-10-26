@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.6 (Current) - Runtime Blocker Fixes, Operational Integrity & Performance Optimization](#version-296)
+- [Version 2.9.7 (Current) - Confirmation Email Title Deduplication Fix](#version-297)
+- [Version 2.9.6 - Runtime Blocker Fixes, Operational Integrity & Performance Optimization](#version-296)
 - [Version 2.9.5 - Dual-Sheet Transportation & Multi-Driver Sync Engine](#version-295)
 - [Version 2.9.4 - Dedicated Lodging Sheet, Room Inventory & Host Church Room Import](#version-294)
 - [Version 2.9.3 - Host Church Logistics, Lodging Standardization & International Phone Fix](#version-293)
@@ -21,6 +22,20 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-297"></a>
+## Version 2.9.7
+*October 2026*
+
+### Confirmation Email Subject & Body Title Deduplication
+- **Resolved Duplicate "Registration Registration" in Subject Lines**:
+  - In `masterRespondToRegistration(e)` and `testEmailVersions()`, normalized `settings.EventName` to strip trailing `"Registration"` or `"Registration Form"` suffixes before constructing email subject lines.
+  - Ensures `"Registration"` is appended exactly once, preventing double suffixing (`"... Registration Registration"`) on initial confirmation, updated registration confirmation, waitlist, and waitlist update emails.
+- **Cleaned Grammatical Phrasing in Email Body Content**:
+  - Updated success confirmation, waitlist, and rejection notification email templates in `masterRespondToRegistration(e)` and `testEmailVersions()` to interpolate `cleanEventName` instead of raw `settings.EventName`.
+  - Eliminates redundant wording such as *"received your registration for the [Event Title] Registration"*, producing natural, grammatically correct phrasing (*"received your registration for the [Event Title]"*).
 
 ---
 
