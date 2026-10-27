@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.7 (Current) - Confirmation Email Title Deduplication Fix](#version-297)
+- [Version 2.9.8 (Current) - Summary Dashboard Resilience, Dynamic Ingestion & Multilingual Formula Hardening](#version-298)
+- [Version 2.9.7 - Confirmation Email Title Deduplication Fix](#version-297)
 - [Version 2.9.6 - Runtime Blocker Fixes, Operational Integrity & Performance Optimization](#version-296)
 - [Version 2.9.5 - Dual-Sheet Transportation & Multi-Driver Sync Engine](#version-295)
 - [Version 2.9.4 - Dedicated Lodging Sheet, Room Inventory & Host Church Room Import](#version-294)
@@ -22,6 +23,31 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-298"></a>
+## Version 2.9.8
+*October 2026*
+
+### Summary Dashboard Formula Resilience & Dynamic Ingestion
+- **Demographics Gender Isolation (Eliminated Female/Male Overlap)**:
+  - Fixed legacy wildcard formulas (`*Male*`) where `Female` was incorrectly matched and counted as Male.
+  - Enforced strict prefix matching (`"Male*"` / `"Female*"`) paired with bilingual and Chinese character fallbacks (`"男"`, `"女"`).
+  - Eliminates inflated male headcounts and ensures that male + female counts equal total registrants exactly.
+- **Sleep Preferences Multi-Criteria Hardening & Multilingual Support**:
+  - Upgraded multi-criteria `COUNTIFS` in `setupSummaryDashboard()` to search using flexible substring wildcards (`*Light sleeper*`, `*Heavy sleeper*`, `*Early riser*`, `*Late sleeper*`, `*Snorer*`) while seamlessly recognizing legacy aliases (`*Night owl*`) and Traditional Chinese translations (`*淺眠*`, `*深眠*`, `*早起者*`, `*夜貓子*`, `*打呼*`).
+  - Embedded `"Male*"` and `"Female*"` prefix matching within sleep preference formulas to prevent cross-gender contamination.
+  - Dynamically calculates row totals using `=SUM(B{row}:C{row})` rather than running standalone column queries.
+- **Dynamic Field Ingestion & Misleading Zero Elimination**:
+  - `setupSummaryDashboard()` now dynamically checks `selectedFieldNames` and response headers before generating metrics:
+    - If `"Staying at Host Church?"` was not included in the form (e.g. CYSC or youth events where all participants stay at church by default), displays `"N/A (Not in form)"` instead of evaluating `#N/A` into a confusing `0`.
+    - Conditionally includes Travel Logistics, Pre/Post-Event Lodging, and Sleep Preferences tables only when relevant questions exist.
+    - Updated Pre/Post Event Lodging formulas with bilingual support (`*活動前需要住宿*` / `*活動後需要住宿*`).
+- **Dietary & Special Needs Multilingual Exclusions**:
+  - Enhanced `cNeedsMatch()` to match Chinese headers (`飲食/藥物`, `特殊需求`) and properly exclude Chinese equivalents of None (`無`, `没有`, `無特殊需求`).
+- **1-Click Summary Dashboard Rebuilder (`rebuildSummaryDashboardMenu`)**:
+  - Added **USGA Events > Advanced Maintenance > Rebuild Summary Dashboard for Event Sheet** to quickly regenerate the `Summary Dashboard` tab on any active event spreadsheet without affecting manual assignments or other operational tabs.
 
 ---
 

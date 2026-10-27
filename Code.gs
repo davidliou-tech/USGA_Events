@@ -27,6 +27,7 @@ function onOpen() {
       .addSubMenu(ui.createMenu('Advanced Maintenance')
           .addItem('Sync Active Events from System Log', 'syncActiveEventsFromSystemLogMenu')
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
+          .addItem('Rebuild Summary Dashboard for Event Sheet', 'rebuildSummaryDashboardMenu')
           .addItem('Setup / Sync Lodging & Room Inventory Tabs', 'syncLodgingAndRoomsMenu')
           .addItem('Import Host Church Rooms into Event Sheet', 'importHostChurchRoomsMenu')
           .addItem('Sync Logistics "Staying at Church" Column', 'syncLogisticsStayingAtChurchMenu')
@@ -1132,15 +1133,24 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
   
   const sumData = [];
 
-  // Helper for single match
-  const cCountIfs = (name, val) => {
-     return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("${name}*", 'Form Responses 1'!1:1, 0)), "${val}"), 0)`;
+  // Helper for single match with resilient bilingual header fallback
+  const cCountIfs = (name, val, zhHeader) => {
+     const headerMatch = zhHeader
+       ? `IFERROR(MATCH("${name}*", 'Form Responses 1'!1:1, 0), MATCH("*${zhHeader}*", 'Form Responses 1'!1:1, 0))`
+       : `MATCH("${name}*", 'Form Responses 1'!1:1, 0)`;
+     return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "${val}"), 0)`;
   };
 
   // Helper for wildcard arrival/departure matching with priority for details header
-  const cTravelMatch = (type, mode) => {
-     const headerMatch = `IFERROR(MATCH("${type} Details*", 'Form Responses 1'!1:1, 0), MATCH("${type}*", 'Form Responses 1'!1:1, 0))`;
-     return `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "*${mode}*"), COUNTIF('Form Responses 1'!1:1000, "*${type === 'Arrival' ? 'arriving' : 'departing'} by ${mode}*"))`;
+  const cTravelMatch = (type, mode, zhMode) => {
+     const zhHeader = type === 'Arrival' ? '抵達*' : '出發*';
+     const headerMatch = `IFERROR(MATCH("${type} Details*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("${type}*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("${zhHeader}", 'Form Responses 1'!1:1, 0), MATCH("*${type}*", 'Form Responses 1'!1:1, 0))))`;
+     const enFormula = `COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "*${mode}*")`;
+     const fallback = `COUNTIF('Form Responses 1'!1:1000, "*${type === 'Arrival' ? 'arriving' : 'departing'} by ${mode}*")`;
+     if (zhMode) {
+       return `=IFERROR(IF(${enFormula} > 0, ${enFormula}, IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "*${zhMode}*"), ${fallback})), ${fallback})`;
+     }
+     return `=IFERROR(${enFormula}, ${fallback})`;
   };
 
   const hasParticipants = !!ss.getSheetByName("Participants");
@@ -1151,18 +1161,25 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
   sumData.push(["Total Registrants", totalFormula, "", ""]);
   sumData.push(["", "", "", ""]);
   
-  sumData.push(["Travel Logistics", "", "", ""]);
-  sumData.push(["Arriving by Flight", cTravelMatch("Arrival", "flight"), "", ""]);
-  sumData.push(["Arriving by Train/Bus", cTravelMatch("Arrival", "train"), "", ""]);
-  sumData.push(["Arriving by Car", cTravelMatch("Arrival", "car"), "", ""]);
-  sumData.push(["Does Not Need Pickup", cTravelMatch("Arrival", "need pickup"), "", ""]);
-  sumData.push(["Departing by Flight", cTravelMatch("Departure", "flight"), "", ""]);
-  sumData.push(["Departing by Train/Bus", cTravelMatch("Departure", "train"), "", ""]);
-  sumData.push(["Departing by Car", cTravelMatch("Departure", "car"), "", ""]);
-  sumData.push(["Does Not Need Drop-off", cTravelMatch("Departure", "need drop"), "", ""]);
-  sumData.push(["", "", "", ""]);
+  const names = selectedFieldNames || [];
+  const hasTravel = !selectedFieldNames || selectedFieldNames.length === 0 || names.some(n => {
+    const l = String(n).toLowerCase();
+    return l.includes("arrival") || l.includes("departure") || l.includes("flight") || l.includes("train") || l.includes("抵達") || l.includes("出發");
+  });
 
-  sumData.push(["Lodging Needs & Room Capacity", "", "", ""]);
+  if (hasTravel) {
+    sumData.push(["Travel Logistics", "", "", ""]);
+    sumData.push(["Arriving by Flight", cTravelMatch("Arrival", "flight", "飛機"), "", ""]);
+    sumData.push(["Arriving by Train/Bus", cTravelMatch("Arrival", "train", "火車"), "", ""]);
+    sumData.push(["Arriving by Car", cTravelMatch("Arrival", "car", "車"), "", ""]);
+    sumData.push(["Does Not Need Pickup", cTravelMatch("Arrival", "need pickup", "不需被接送"), "", ""]);
+    sumData.push(["Departing by Flight", cTravelMatch("Departure", "flight", "飛機"), "", ""]);
+    sumData.push(["Departing by Train/Bus", cTravelMatch("Departure", "train", "火車"), "", ""]);
+    sumData.push(["Departing by Car", cTravelMatch("Departure", "car", "車"), "", ""]);
+    sumData.push(["Does Not Need Drop-off", cTravelMatch("Departure", "need drop", "不需被接送"), "", ""]);
+    sumData.push(["", "", "", ""]);
+  }
+
   const cLodgingMatch = (mode) => {
      const standardHeader = `IFERROR(MATCH("I will be staying*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*staying*church*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*我將住在主辦教會*", 'Form Responses 1'!1:1, 0), MATCH("*住在教會*", 'Form Responses 1'!1:1, 0))))`;
      const legacyHeader = `IFERROR(MATCH("Lodging Arrangement*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("Lodging*", 'Form Responses 1'!1:1, 0), MATCH("*住宿安排*", 'Form Responses 1'!1:1, 0)))`;
@@ -1173,50 +1190,129 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
      }
   };
 
-  sumData.push(["Staying at Hosting Church", cLodgingMatch("Yes"), "", ""]);
-  sumData.push(["Not Staying at Hosting Church", cLodgingMatch("No"), "", ""]);
-  sumData.push(["Lodging Before Event", cCountIfs("I need lodging before", "Yes*"), "", ""]);
-  sumData.push(["Lodging After Event", cCountIfs("I need lodging after", "Yes*"), "", ""]);
-  sumData.push(["Total Room Capacity (Room Inventory)", `=IFERROR(SUM('Room Inventory'!D2:D), 0)`, "", ""]);
-  sumData.push(["Assigned to Rooms", `=IFERROR(SUM('Room Inventory'!G2:G), 0)`, "", ""]);
-  sumData.push(["Remaining Room Capacity", `=IFERROR(SUM('Room Inventory'!H2:H), 0)`, "", ""]);
-  sumData.push(["", "", "", ""]);
-
-  sumData.push(["Dietary & Medical", "", "", ""]);
-  const cNeedsMatch = (matcher) => {
-      const idx = `INDEX('Form Responses 1'!A2:ZZ, 0, MATCH("${matcher}", 'Form Responses 1'!1:1, 0))`;
-      return `=IFERROR(COUNTIFS(${idx}, "<>", ${idx}, "<>None", ${idx}, "<>None ", ${idx}, "<> None", ${idx}, "<>No", ${idx}, "<>N/A", ${idx}, "<>NA", ${idx}, "<>None.", ${idx}, "<>Thank you!", ${idx}, "<>Thank you", ${idx}, "<>*don*t need lodging*", ${idx}, "<>無", ${idx}, "<>没有"), 0)`;
+  const cLodgingPrePostMatch = (type) => {
+     const enKey = type === "before" ? "I need lodging before" : "I need lodging after";
+     const zhKey = type === "before" ? "*活動前需要住宿*" : "*活動後需要住宿*";
+     const headerMatch = `IFERROR(MATCH("${enKey}*", 'Form Responses 1'!1:1, 0), MATCH("${zhKey}", 'Form Responses 1'!1:1, 0))`;
+     return `=IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "Yes*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "Yes*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "*是*")), 0)`;
   };
-  sumData.push(["Has Food/Medicine Restrictions", cNeedsMatch("Food/Medicine*"), "", ""]);
-  sumData.push(["Has Other Special Needs", cNeedsMatch("Other Special Needs*"), "", ""]);
-  sumData.push(["", "", "", ""]);
 
+  const hasStaying = names.some(isStayingAtChurchField);
+  const hasPreLodging = !selectedFieldNames || selectedFieldNames.length === 0 || names.some(n => {
+    const l = String(n).toLowerCase();
+    return l.includes("lodging before") || l.includes("活動前需要住宿");
+  });
+  const hasPostLodging = !selectedFieldNames || selectedFieldNames.length === 0 || names.some(n => {
+    const l = String(n).toLowerCase();
+    return l.includes("lodging after") || l.includes("活動後需要住宿");
+  });
+  const hasAnyLodging = hasStaying || hasPreLodging || hasPostLodging || ss.getSheetByName("Lodging") || ss.getSheetByName("Room Inventory");
+
+  if (hasAnyLodging) {
+    sumData.push(["Lodging Needs & Room Capacity", "", "", ""]);
+    if (hasStaying) {
+      sumData.push(["Staying at Hosting Church", cLodgingMatch("Yes"), "", ""]);
+      sumData.push(["Not Staying at Hosting Church", cLodgingMatch("No"), "", ""]);
+    } else {
+      sumData.push(["Staying at Hosting Church", "N/A (Not in form)", "", ""]);
+      sumData.push(["Not Staying at Hosting Church", "N/A (Not in form)", "", ""]);
+    }
+    if (hasPreLodging) {
+      sumData.push(["Lodging Before Event", cLodgingPrePostMatch("before"), "", ""]);
+    }
+    if (hasPostLodging) {
+      sumData.push(["Lodging After Event", cLodgingPrePostMatch("after"), "", ""]);
+    }
+    sumData.push(["Total Room Capacity (Room Inventory)", `=IFERROR(SUM('Room Inventory'!D2:D), 0)`, "", ""]);
+    sumData.push(["Assigned to Rooms", `=IFERROR(SUM('Room Inventory'!G2:G), 0)`, "", ""]);
+    sumData.push(["Remaining Room Capacity", `=IFERROR(SUM('Room Inventory'!H2:H), 0)`, "", ""]);
+    sumData.push(["", "", "", ""]);
+  }
+
+  // Dietary & Medical
+  const hasDietary = !selectedFieldNames || selectedFieldNames.length === 0 || names.some(n => {
+    const l = String(n).toLowerCase();
+    return l.includes("food/medicine") || l.includes("special needs") || l.includes("飲食") || l.includes("需求");
+  });
+
+  if (hasDietary) {
+    sumData.push(["Dietary & Medical", "", "", ""]);
+    const cNeedsMatch = (matcher, zhMatcher) => {
+        const headerMatch = zhMatcher 
+          ? `IFERROR(MATCH("${matcher}*", 'Form Responses 1'!1:1, 0), MATCH("*${zhMatcher}*", 'Form Responses 1'!1:1, 0))`
+          : `MATCH("${matcher}*", 'Form Responses 1'!1:1, 0)`;
+        const idx = `INDEX('Form Responses 1'!A2:ZZ, 0, ${headerMatch})`;
+        return `=IFERROR(COUNTIFS(${idx}, "<>", ${idx}, "<>None", ${idx}, "<>None ", ${idx}, "<> None", ${idx}, "<>No", ${idx}, "<>N/A", ${idx}, "<>NA", ${idx}, "<>None.", ${idx}, "<>Thank you!", ${idx}, "<>Thank you", ${idx}, "<>*don*t need lodging*", ${idx}, "<>無", ${idx}, "<>没有", ${idx}, "<>無特殊需求"), 0)`;
+    };
+    sumData.push(["Has Food/Medicine Restrictions", cNeedsMatch("Food/Medicine", "飲食/藥物"), "", ""]);
+    sumData.push(["Has Other Special Needs", cNeedsMatch("Other Special Needs", "特殊需求"), "", ""]);
+    sumData.push(["", "", "", ""]);
+  }
+
+  // Demographics with strict prefix matching to prevent Female matching Male
   sumData.push(["Demographics", "", "", ""]);
-  sumData.push(["Males", cCountIfs("Gender", "Male*"), "", ""]);
-  sumData.push(["Females", cCountIfs("Gender", "Female*"), "", ""]);
+  const cGenderCount = (gender) => {
+     const headerMatch = `IFERROR(MATCH("Gender*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*Gender*", 'Form Responses 1'!1:1, 0), MATCH("*性別*", 'Form Responses 1'!1:1, 0)))`;
+     if (gender === "Male") {
+        return `=IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "Male*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "Male*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "*男*")), 0)`;
+     } else {
+        return `=IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "Female*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "Female*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${headerMatch}), "*女*")), 0)`;
+     }
+  };
+  sumData.push(["Males", cGenderCount("Male"), "", ""]);
+  sumData.push(["Females", cGenderCount("Female"), "", ""]);
   
-  const names = selectedFieldNames || [];
-  if (names.some(n => n.includes("My current age group"))) {
+  if (names.some(n => n.includes("My current age group") || n.toLowerCase().includes("age group") || n.includes("年齡組別"))) {
       sumData.push(["", "", "", ""]);
       sumData.push(["Age Groups", "", "", ""]);
       const ageGroups = ['12-14', '15-18', '19-25', '26-35', '36-50', '51+'];
       ageGroups.forEach(ag => {
-         sumData.push([ag, cCountIfs("My current age group", ag), "", ""]);
+         const agHeader = `IFERROR(MATCH("My current age group*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*Age Group*", 'Form Responses 1'!1:1, 0), MATCH("*年齡組別*", 'Form Responses 1'!1:1, 0)))`;
+         sumData.push([ag, `=IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${agHeader}), "${ag}*"), 0)`, "", ""]);
       });
   }
 
-  sumData.push(["", "", "", ""]);
-  
-  const prefs = ['Light sleeper (sensitive to noise/light)', 'Heavy sleeper', 'Early riser', 'Late sleeper', 'Snorer'];
-  const prefCountIfs = (pref, gender) => {
-     return `=IFERROR(COUNTIFS(INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Gender*", 'Form Responses 1'!1:1, 0)), "${gender}*", INDEX('Form Responses 1'!A:ZZ, 0, MATCH("Sleep Preferences*", 'Form Responses 1'!1:1, 0)), "*${pref}*"), 0)`;
-  };
-  
-  sumData.push(["Sleep Preferences", "Males", "Females", "Total"]);
-  prefs.forEach(p => {
-     const rowNum = 3 + sumData.length;
-     sumData.push([p, prefCountIfs(p, "Male"), prefCountIfs(p, "Female"), `=SUM(B${rowNum}:C${rowNum})`]);
+  // Sleep Preferences
+  const hasSleepPrefs = !selectedFieldNames || selectedFieldNames.length === 0 || names.some(n => {
+     const l = String(n).toLowerCase();
+     return l.includes("sleep preferences") || l.includes("sleep habits") || l.includes("睡眠");
   });
+
+  if (hasSleepPrefs) {
+    sumData.push(["", "", "", ""]);
+    
+    const sleepPrefDefs = [
+       { label: 'Light sleeper (sensitive to noise/light)', en: '*Light sleeper*', zh: '*淺眠*' },
+       { label: 'Heavy sleeper', en: '*Heavy sleeper*', zh: '*深眠*' },
+       { label: 'Early riser', en: '*Early riser*', zh: '*早起者*' },
+       { label: 'Late sleeper', en: '*Late sleeper*', zh: '*夜貓子*', extraEn: '*Night owl*' },
+       { label: 'Snorer', en: '*Snorer*', zh: '*打呼*' }
+    ];
+    
+    const sleepHeader = `IFERROR(MATCH("Sleep Preferences*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*Sleep Preferences*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*睡眠偏好*", 'Form Responses 1'!1:1, 0), MATCH("*睡眠習慣*", 'Form Responses 1'!1:1, 0))))`;
+    const genderHeader = `IFERROR(MATCH("Gender*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*Gender*", 'Form Responses 1'!1:1, 0), MATCH("*性別*", 'Form Responses 1'!1:1, 0)))`;
+
+    const prefCountIfs = (def, gender) => {
+       const sleepCol = `INDEX('Form Responses 1'!A:ZZ, 0, ${sleepHeader})`;
+       const genderCol = `INDEX('Form Responses 1'!A:ZZ, 0, ${genderHeader})`;
+       const gValEng = gender === "Male" ? "Male*" : "Female*";
+       const gValZh = gender === "Male" ? "*男*" : "*女*";
+       
+       const enFormula = def.extraEn
+         ? `(COUNTIFS(${genderCol}, "${gValEng}", ${sleepCol}, "${def.en}") + COUNTIFS(${genderCol}, "${gValEng}", ${sleepCol}, "${def.extraEn}"))`
+         : `COUNTIFS(${genderCol}, "${gValEng}", ${sleepCol}, "${def.en}")`;
+         
+       const zhFormula = `COUNTIFS(${genderCol}, "${gValZh}", ${sleepCol}, "${def.zh}")`;
+       
+       return `=IFERROR(IF(${enFormula} > 0, ${enFormula}, ${zhFormula}), 0)`;
+    };
+    
+    sumData.push(["Sleep Preferences", "Males", "Females", "Total"]);
+    sleepPrefDefs.forEach(def => {
+       const rowNum = 3 + sumData.length;
+       sumData.push([def.label, prefCountIfs(def, "Male"), prefCountIfs(def, "Female"), `=SUM(B${rowNum}:C${rowNum})`]);
+    });
+  }
 
   summarySheet.getRange(3, 1, sumData.length, 4).setValues(sumData);
   summarySheet.getRange(3, 1, sumData.length, 1).setFontWeight("bold");
@@ -5700,3 +5796,37 @@ function configureDelegatedWebApp() {
   }
 }
 
+/**
+ * Menu handler to refresh/rebuild only the Summary Dashboard tab for an event spreadsheet
+ * using the latest robust formulas without modifying or wiping other tabs.
+ */
+function rebuildSummaryDashboardMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const resp = ui.prompt(
+    'Rebuild Summary Dashboard',
+    'Enter or paste the URL of the Event Responses Spreadsheet (or leave blank if running directly inside the event spreadsheet):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+
+  const url = resp.getResponseText().trim();
+  let targetSs;
+  try {
+    targetSs = url ? SpreadsheetApp.openByUrl(url) : SpreadsheetApp.getActiveSpreadsheet();
+  } catch(e) {
+    ui.alert('Error', 'Could not open the spreadsheet: ' + e.message, ui.ButtonSet.OK);
+    return;
+  }
+
+  const responsesSheet = targetSs.getSheetByName("Form Responses 1");
+  if (!responsesSheet) {
+    ui.alert('Error', 'Could not find "Form Responses 1" tab in this spreadsheet.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const respData = responsesSheet.getDataRange().getDisplayValues();
+  const selectedNames = respData.length > 0 ? respData[0].map(h => String(h).trim()).filter(Boolean) : [];
+
+  setupSummaryDashboard(targetSs, selectedNames);
+  ui.alert('Success', `Successfully rebuilt the "Summary Dashboard" tab for "${targetSs.getName()}" with modern resilient formulas!`, ui.ButtonSet.OK);
+}
