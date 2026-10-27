@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.8 (Current) - Summary Dashboard Resilience, Dynamic Ingestion & Multilingual Formula Hardening](#version-298)
+- [Version 2.9.9 (Current) - Printable Check-In Sheet, Registration Change Log & Automatic Room Release](#version-299)
+- [Version 2.9.8 - Summary Dashboard Resilience, Dynamic Ingestion & Multilingual Formula Hardening](#version-298)
 - [Version 2.9.7 - Confirmation Email Title Deduplication Fix](#version-297)
 - [Version 2.9.6 - Runtime Blocker Fixes, Operational Integrity & Performance Optimization](#version-296)
 - [Version 2.9.5 - Dual-Sheet Transportation & Multi-Driver Sync Engine](#version-295)
@@ -23,6 +24,33 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-299"></a>
+## Version 2.9.9
+*October 2026*
+
+### Printable `Check-In` Sheet, Registration `Change Log` & Automatic Room Release
+- **Dedicated Printable `Check-In` Tab (`setupCheckInSheet` & `buildArrivalSummaryText`)**:
+  - Added a print-formatted **`Check-In`** worksheet (`28px` row height, compact columns for 8.5" × 11" printing or tablet check-in) to every newly generated event sheet and existing sheets via one-click sync.
+  - **Interactive Checkboxes**: `Checked In` (Column A) and `Welcome Gift` (Column B) checkboxes, preserved across re-sorts and syncs.
+  - **Consolidated `Arrival Date & Mode` (Column F)**: Automatically combines flight/train arrival date + time, lodging arrival dates, or pre-event arrival status alongside travel mode (`Flight`, `Train/Bus`, `Car`, `Own Transit`).
+  - **Live Sort-Safe Lookups (`getCheckInRoomLookupFormula` & `getCheckInGroupLookupFormula`)**:
+    - Column G (`Lodging / Room Assignment`) dynamically looks up the participant's assigned room and bed spot from the `Lodging` tab, displaying a **Green** badge when assigned, a **Bold Red** alert (`⚠️ Unassigned (Needs Room)`) if they requested church lodging but have no room assigned yet, or a **Gray** badge (`Self / Hotel`) if not staying at church.
+    - Column H (`Group / Team`) dynamically looks up the participant's fellowship group from `Logistics`.
+- **Automatic Room Release & Audit Trail on Cancellation (Enhancement B)**:
+  - When a participant edits their registration to switch from *Host Church Lodging* to *Self-Arranged* (or cancels):
+    - Automatically clears their `Room Assignment` and `Bed / Spot` on `Lodging` so the room dropdown is clean and the bed is freed immediately.
+    - Prepends `[Cancelled Church Lodging on MM/DD — Previously assigned to: Room X (Bed Y)]` into **`Lodging Notes`** so the hospitality team knows which physical room/bed had already been prepared for them.
+  - Added a **`Status` dropdown** (`Active`, `UPDATED`, `CANCELLED`, `WAITLISTED`) on `Lodging` and updated `Summary Dashboard`'s `Staying at Hosting Church` formula to count active `Lodging` rows rather than raw `Form Responses 1` rows—allowing host church coordinators to cancel a participant's church stay directly on `Lodging` when notified offline.
+  - Highlighted blank `Room Assignment` cells on `Lodging` in soft yellow (`#fef7e0`) for active lodgers and added an **`Awaiting Room Assignment (Unassigned on Lodging)`** KPI on `Summary Dashboard`.
+- **Dedicated `Change Log` Sheet & Unreviewed Change Counter (Enhancement C)**:
+  - Added a **`Change Log`** tab (`setupChangeLogSheet` & `logRegistrationChanges`) that automatically records a timestamped entry whenever a registrant modifies or cancels their lodging or transit plans (`Lodging Cancelled`, `Lodging Updated`, `Lodging Added`, `Pickup Updated/Cancelled`, `Drop-Off Updated/Cancelled`).
+  - Captures exact **Before → After** diffs alongside **`Previous Room / Driver Impacted`** (e.g., `⚠️ Room Released: Main Church - Room 102` or `⚠️ Driver Assigned: Bro. John`).
+  - Includes a **`Reviewed?` checkbox** (Column A): unreviewed rows highlight in soft red (`#fce8e6`) and increment the **`Unreviewed Registration Changes (Change Log)`** alert counter at the top of `Summary Dashboard`; checking the box turns the row soft green (`#e6f4ea`) and clears the dashboard alert.
+- **One-Click Maintenance Sync (`syncCheckInAndChangeLogMenu` & Sidebar)**:
+  - Added **USGA Events > Advanced Maintenance > Setup / Sync Printable Check-In & Change Log Tabs** and integrated Check-In + Change Log provisioning into `syncLodgingAndRoomsForSheet` and `upgradeExistingSheet`.
 
 ---
 

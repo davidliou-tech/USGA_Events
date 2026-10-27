@@ -29,6 +29,7 @@ function onOpen() {
           .addItem('Upgrade Existing Sheet (Full Sync)', 'upgradeExistingSheet')
           .addItem('Rebuild Summary Dashboard for Event Sheet', 'rebuildSummaryDashboardMenu')
           .addItem('Setup / Sync Lodging & Room Inventory Tabs', 'syncLodgingAndRoomsMenu')
+          .addItem('Setup / Sync Printable Check-In & Change Log Tabs', 'syncCheckInAndChangeLogMenu')
           .addItem('Import Host Church Rooms into Event Sheet', 'importHostChurchRoomsMenu')
           .addItem('Sync Logistics "Staying at Church" Column', 'syncLogisticsStayingAtChurchMenu')
           .addItem('Clean Up Dead Triggers', 'cleanupDeadTriggers')
@@ -957,11 +958,296 @@ function setupLodgingSheet(ss, selectedFieldNames) {
     lodgingSheet.setConditionalFormatRules(existingRules);
   }
 
+  // Status dropdown & unassigned room highlighting on Lodging
+  const statusColIdx = allHeaders.indexOf("Status") + 1;
+  const roomColIdx = allHeaders.indexOf("Room Assignment") + 1;
+  if (statusColIdx > 0 && lodgingSheet.getMaxRows() > 1) {
+    const statusDropdown = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["Active", "UPDATED", "CANCELLED", "WAITLISTED"], true)
+      .setAllowInvalid(true)
+      .build();
+    lodgingSheet.getRange(2, statusColIdx, lodgingSheet.getMaxRows() - 1, 1).setDataValidation(statusDropdown);
+    lodgingSheet.getRange(1, statusColIdx).setNote(
+      "[Automated / Coordinator Override]\nShows 'Active', 'UPDATED', 'WAITLISTED', or 'CANCELLED'.\n\nTip: If a participant informs the host church directly that they no longer need church lodging, you can change their Status here to 'CANCELLED' and clear their Room Assignment to immediately free up their bed on Room Inventory and Summary Dashboard."
+    );
+  }
+
+  if (roomColIdx > 0 && statusColIdx > 0 && lodgingSheet.getMaxRows() > 1) {
+    const stColLetter = columnToLetter(statusColIdx);
+    const rmColLetter = columnToLetter(roomColIdx);
+    const roomRange = lodgingSheet.getRange(2, roomColIdx, lodgingSheet.getMaxRows() - 1, 1);
+    const unassignedRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND($A2<>"", $${stColLetter}2<>"CANCELLED", $${stColLetter}2<>"WAITLISTED", $${rmColLetter}2="")`)
+      .setBackground("#fef7e0")
+      .setFontColor("#b06000")
+      .setRanges([roomRange])
+      .build();
+    const rules = lodgingSheet.getConditionalFormatRules() || [];
+    rules.push(unassignedRule);
+    lodgingSheet.setConditionalFormatRules(rules);
+  }
+
   if (!lodgingSheet.getFilter()) {
     lodgingSheet.getRange(1, 1, lodgingSheet.getMaxRows(), allHeaders.length).createFilter();
   }
 
   return lodgingSheet;
+}
+
+/**
+ * Helper formulas for the Printable Check-In sheet so row sorting preserves live links to Lodging and Logistics.
+ */
+function getCheckInRoomLookupFormula() {
+  return `=IF(INDIRECT("RC[3]", FALSE)="", "", IFERROR(INDEX(FILTER(IF(Lodging!$N$2:$N<>"", Lodging!$N$2:$N & IF(Lodging!$P$2:$P<>"", " (" & Lodging!$P$2:$P & ")", ""), "⚠️ Unassigned (Needs Room)"), LOWER(TRIM(Lodging!$A$2:$A))=LOWER(TRIM(INDIRECT("RC[4]", FALSE))), LOWER(TRIM(Lodging!$B$2:$B))=LOWER(TRIM(INDIRECT("RC[3]", FALSE))), Lodging!$M$2:$M<>"CANCELLED", Lodging!$M$2:$M<>"WAITLISTED"), 1), "Self / Hotel"))`;
+}
+
+function getCheckInGroupLookupFormula() {
+  return `=IF(INDIRECT("RC[2]", FALSE)="", "", IFERROR(INDEX(FILTER(INDEX(Logistics!$A$2:$ZZ, 0, MATCH("Group/Team", Logistics!$1:$1, 0)), LOWER(TRIM(Logistics!$A$2:$A))=LOWER(TRIM(INDIRECT("RC[3]", FALSE))), LOWER(TRIM(Logistics!$B$2:$B))=LOWER(TRIM(INDIRECT("RC[2]", FALSE)))), 1), ""))`;
+}
+
+/**
+ * Sets up the Printable Check-In sheet formatted specifically for printing on 8.5"x11" paper
+ * or using at the welcome desk on a tablet/laptop.
+ */
+function setupCheckInSheet(ss) {
+  let checkInSheet = ss.getSheetByName("Check-In");
+  if (!checkInSheet) {
+    checkInSheet = ss.insertSheet("Check-In");
+  } else {
+    checkInSheet.clear();
+  }
+
+  const headers = [
+    "Checked In",
+    "Welcome Gift",
+    "Last Name",
+    "First Name",
+    "Local Church",
+    "Arrival Date & Mode",
+    "Lodging / Room Assignment",
+    "Group / Team",
+    "Check-In Notes",
+    "Email"
+  ];
+
+  checkInSheet.appendRow(headers);
+
+  // Checkboxes and Notes (Cols 1-2, Col 9) in Host Church Yellow; Auto/Live Columns (Cols 3-8, 10) in Blue
+  checkInSheet.getRange(1, 1, 1, 2).setFontWeight("bold").setBackground("#ffd966").setFontColor("black").setHorizontalAlignment("center");
+  checkInSheet.getRange(1, 3, 1, 6).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
+  checkInSheet.getRange(1, 9, 1, 1).setFontWeight("bold").setBackground("#ffd966").setFontColor("black");
+  checkInSheet.getRange(1, 10, 1, 1).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
+
+  const checkInNotes = [[
+    "[Welcome Desk Checkbox]\nCheck this box on screen (or by hand on a printed sheet) when the participant arrives and checks in.",
+    "[Welcome Desk Checkbox]\nCheck this box when the participant receives their welcome package, name badge, or gift.",
+    "Sorted alphabetically by Last Name for fast check-in lookup.",
+    "Participant's First Name.",
+    "Participant's home church or fellowship.",
+    "Automatically consolidates the participant's arrival date and travel mode (Flight, Train/Bus, Lodging arrival date, or Car).",
+    "[Live Lookup from Lodging Tab]\nAutomatically displays the room (and bed spot) assigned on the 'Lodging' tab.\n• Shows '⚠️ Unassigned (Needs Room)' in yellow if they requested church lodging but haven't been assigned a room yet.\n• Shows 'Self / Hotel' if not staying at the host church.",
+    "[Live Lookup from Logistics Tab]\nAutomatically displays the participant's fellowship Group/Team assigned on the 'Logistics' tab.",
+    "[Welcome Desk Notes]\nSpace for handwritten notes on printed sheets or typed notes at the check-in table.",
+    "[Internal Matching Key]\nUsed to match records accurately across family registrations. Tip: Hide Column J before printing if desired."
+  ]];
+  checkInSheet.getRange(1, 1, 1, headers.length).setNotes(checkInNotes);
+
+  checkInSheet.setFrozenRows(1);
+  checkInSheet.setRowHeight(1, 32);
+
+  // Print-friendly column widths
+  checkInSheet.setColumnWidth(1, 85);  // Checked In
+  checkInSheet.setColumnWidth(2, 95);  // Welcome Gift
+  checkInSheet.setColumnWidth(3, 125); // Last Name
+  checkInSheet.setColumnWidth(4, 125); // First Name
+  checkInSheet.setColumnWidth(5, 145); // Local Church
+  checkInSheet.setColumnWidth(6, 175); // Arrival Date & Mode
+  checkInSheet.setColumnWidth(7, 210); // Lodging / Room Assignment
+  checkInSheet.setColumnWidth(8, 115); // Group / Team
+  checkInSheet.setColumnWidth(9, 180); // Check-In Notes
+  checkInSheet.setColumnWidth(10, 160); // Email
+
+  const maxRows = Math.max(checkInSheet.getMaxRows(), 150);
+  if (maxRows > 1) {
+    const cbRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+    checkInSheet.getRange(2, 1, maxRows - 1, 2).setDataValidation(cbRule).setHorizontalAlignment("center");
+
+    // Highlight "⚠️ Unassigned (Needs Room)" in soft orange/red and assigned church rooms in soft green
+    const roomColRange = checkInSheet.getRange(2, 7, maxRows - 1, 1);
+    const unassignedRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextContains("Unassigned")
+      .setBackground("#fce8e6")
+      .setFontColor("#c5221f")
+      .setBold(true)
+      .setRanges([roomColRange])
+      .build();
+    const selfRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenTextContains("Self / Hotel")
+      .setBackground("#f1f3f4")
+      .setFontColor("#5f6368")
+      .setRanges([roomColRange])
+      .build();
+    const assignedRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND(G2<>"", NOT(REGEXMATCH(TO_TEXT(G2), "Unassigned|Self / Hotel")))`)
+      .setBackground("#e6f4ea")
+      .setFontColor("#137333")
+      .setBold(true)
+      .setRanges([roomColRange])
+      .build();
+    checkInSheet.setConditionalFormatRules([unassignedRule, selfRule, assignedRule]);
+  }
+
+  if (!checkInSheet.getFilter()) {
+    checkInSheet.getRange(1, 1, checkInSheet.getMaxRows(), headers.length).createFilter();
+  }
+
+  return checkInSheet;
+}
+
+/**
+ * Formats an arrival date + mode summary string for the Printable Check-In sheet.
+ */
+function buildArrivalSummaryText(arrDetails, arrDate, arrTime, exactLodgingDates, lodgingBefore, isCancelledOrRejected) {
+  if (isCancelledOrRejected) return "CANCELLED";
+  const parts = [];
+  const dStr = String(arrDate || "").trim();
+  const tStr = String(arrTime || "").trim();
+  const modeRaw = String(arrDetails || "").toLowerCase();
+  let modeLabel = "";
+  if (modeRaw.includes("flight") || modeRaw.includes("飛機")) modeLabel = "Flight";
+  else if (modeRaw.includes("train") || modeRaw.includes("bus") || modeRaw.includes("火車") || modeRaw.includes("巴士")) modeLabel = "Train/Bus";
+  else if (modeRaw.includes("car") || modeRaw.includes("車")) modeLabel = "Car";
+  else if (modeRaw.includes("need pickup") || modeRaw.includes("不需")) modeLabel = "Own Transit";
+
+  if (dStr) {
+    parts.push(tStr ? `${dStr} ${tStr}` : dStr);
+  } else if (exactLodgingDates && String(exactLodgingDates).trim()) {
+    parts.push(String(exactLodgingDates).trim());
+  } else if (lodgingBefore && /^(yes|是)/i.test(String(lodgingBefore).trim())) {
+    parts.push("Pre-Event Arrival");
+  }
+
+  if (modeLabel) {
+    parts.push(`(${modeLabel})`);
+  }
+  return parts.join(" ") || "Standard Arrival";
+}
+
+/**
+ * Sets up or preserves the Change Log sheet that records registration updates & cancellations
+ * (especially when a participant cancels church lodging after a room was assigned, or changes flights).
+ */
+function setupChangeLogSheet(ss, preserveExisting) {
+  let changeSheet = ss.getSheetByName("Change Log");
+  let existingRows = [];
+  if (changeSheet && preserveExisting && changeSheet.getLastRow() > 1) {
+    existingRows = changeSheet.getRange(2, 1, changeSheet.getLastRow() - 1, 8).getValues();
+  }
+
+  if (!changeSheet) {
+    changeSheet = ss.insertSheet("Change Log");
+  } else {
+    changeSheet.clear();
+  }
+
+  const headers = [
+    "Reviewed?",
+    "Timestamp",
+    "Participant Name",
+    "Email",
+    "Category",
+    "Change Summary (Before → After)",
+    "Previous Room / Driver Impacted",
+    "Host Church Action Notes"
+  ];
+
+  changeSheet.appendRow(headers);
+
+  // Col 1 & Col 8 are Host Church Interactive (Yellow); Cols 2-7 are System Audit (Blue)
+  changeSheet.getRange(1, 1, 1, 1).setFontWeight("bold").setBackground("#ffd966").setFontColor("black").setHorizontalAlignment("center");
+  changeSheet.getRange(1, 2, 1, 6).setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
+  changeSheet.getRange(1, 8, 1, 1).setFontWeight("bold").setBackground("#ffd966").setFontColor("black");
+
+  const notes = [[
+    "[Host Church Checkbox]\nCheck this box once your hospitality or transportation team has reviewed this registration change and adjusted any prepared room or ride.",
+    "Date and time the participant updated their registration.",
+    "Full name of the participant whose registration changed.",
+    "Participant's email address.",
+    "Area affected: 'Lodging Cancelled', 'Lodging Added', 'Lodging Updated', 'Pickup Changed', 'Drop-Off Changed', or 'Registration Cancelled'.",
+    "Exact details of what changed from the previous submission to the new submission.",
+    "Shows any Room Assignment, Bed/Spot, or Volunteer Driver that was already assigned to this participant before they changed their registration!",
+    "[Host Church Input - Optional]\nAdd notes on follow-up taken (e.g., 'Removed welcome packet from Room 102', 'Notified Driver Bro. John')."
+  ]];
+  changeSheet.getRange(1, 1, 1, headers.length).setNotes(notes);
+  changeSheet.setFrozenRows(1);
+
+  changeSheet.setColumnWidth(1, 95);
+  changeSheet.setColumnWidth(2, 145);
+  changeSheet.setColumnWidth(3, 160);
+  changeSheet.setColumnWidth(4, 180);
+  changeSheet.setColumnWidth(5, 150);
+  changeSheet.setColumnWidth(6, 340);
+  changeSheet.setColumnWidth(7, 240);
+  changeSheet.setColumnWidth(8, 220);
+
+  const maxRows = Math.max(changeSheet.getMaxRows(), existingRows.length + 100);
+  if (maxRows > 1) {
+    const cbRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+    changeSheet.getRange(2, 1, maxRows - 1, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
+
+    const fullRange = changeSheet.getRange(2, 1, maxRows - 1, headers.length);
+    const unreviewedRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND($B2<>"", $A2=FALSE)`)
+      .setBackground("#fce8e6")
+      .setFontColor("#c5221f")
+      .setRanges([fullRange])
+      .build();
+    const reviewedRule = SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND($B2<>"", $A2=TRUE)`)
+      .setBackground("#e6f4ea")
+      .setFontColor("#137333")
+      .setRanges([fullRange])
+      .build();
+    changeSheet.setConditionalFormatRules([unreviewedRule, reviewedRule]);
+  }
+
+  if (existingRows.length > 0) {
+    changeSheet.getRange(2, 1, existingRows.length, 8).setValues(existingRows);
+  }
+
+  if (!changeSheet.getFilter()) {
+    changeSheet.getRange(1, 1, changeSheet.getMaxRows(), headers.length).createFilter();
+  }
+
+  return changeSheet;
+}
+
+/**
+ * Appends one or more change entries to the Change Log sheet (initializing it if missing).
+ */
+function logRegistrationChanges(ss, changeEntries) {
+  if (!changeEntries || changeEntries.length === 0) return;
+  let changeSheet = ss.getSheetByName("Change Log");
+  if (!changeSheet) {
+    changeSheet = setupChangeLogSheet(ss, false);
+  }
+  const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yyyy h:mm a");
+  const cbRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+
+  for (const entry of changeEntries) {
+    changeSheet.appendRow([
+      false,
+      ts,
+      entry.participantName || "",
+      entry.email || "",
+      entry.category || "Registration Update",
+      entry.summary || "",
+      entry.impactedAssignment || "None assigned yet",
+      ""
+    ]);
+    const lastRow = changeSheet.getLastRow();
+    changeSheet.getRange(lastRow, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
+  }
 }
 
 /**
@@ -1159,6 +1445,13 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
     : `="Total: " & COUNTA('Form Responses 1'!A2:A)`;
 
   sumData.push(["Total Registrants", totalFormula, "", ""]);
+  if (ss.getSheetByName("Change Log")) {
+    sumData.push(["Unreviewed Registration Changes (Change Log)", `=IFERROR(COUNTIFS('Change Log'!B2:B, "<>", 'Change Log'!A2:A, FALSE), 0)`, "", ""]);
+  }
+  if (ss.getSheetByName("Check-In")) {
+    sumData.push(["Checked In On-Site (Check-In)", `=IFERROR(COUNTIF('Check-In'!A2:A, TRUE), 0)`, "", ""]);
+    sumData.push(["Welcome Gifts Distributed (Check-In)", `=IFERROR(COUNTIF('Check-In'!B2:B, TRUE), 0)`, "", ""]);
+  }
   sumData.push(["", "", "", ""]);
   
   const names = selectedFieldNames || [];
@@ -1184,8 +1477,15 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
      const standardHeader = `IFERROR(MATCH("I will be staying*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*staying*church*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("*我將住在主辦教會*", 'Form Responses 1'!1:1, 0), MATCH("*住在教會*", 'Form Responses 1'!1:1, 0))))`;
      const legacyHeader = `IFERROR(MATCH("Lodging Arrangement*", 'Form Responses 1'!1:1, 0), IFERROR(MATCH("Lodging*", 'Form Responses 1'!1:1, 0), MATCH("*住宿安排*", 'Form Responses 1'!1:1, 0)))`;
      if (mode === "Yes") {
+       if (ss.getSheetByName("Lodging")) {
+         return `=IFERROR(COUNTIFS(Lodging!A2:A, "<>", INDEX(Lodging!A2:ZZ, 0, MATCH("Status", Lodging!1:1, 0)), "<>CANCELLED", INDEX(Lodging!A2:ZZ, 0, MATCH("Status", Lodging!1:1, 0)), "<>WAITLISTED"), 0)`;
+       }
        return `=IFERROR(IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${standardHeader}), "Yes*"), 0) + IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*host church*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*host church*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*主辦教會*")), 0), 0)`;
      } else {
+       if (ss.getSheetByName("Logistics")) {
+         const stayCol = `INDEX(Logistics!A2:ZZ, 0, MATCH("Staying at Host Church?", Logistics!1:1, 0))`;
+         return `=IFERROR(COUNTIF(${stayCol}, "No*") + COUNTIF(${stayCol}, "*self*") + COUNTIF(${stayCol}, "*自行安排*"), 0)`;
+       }
        return `=IFERROR(IFERROR(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${standardHeader}), "No*"), 0) + IFERROR(IF(COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*self*") > 0, COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*self*"), COUNTIF(INDEX('Form Responses 1'!A:ZZ, 0, ${legacyHeader}), "*自行安排*")), 0), 0)`;
      }
   };
@@ -1225,6 +1525,9 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
     }
     sumData.push(["Total Room Capacity (Room Inventory)", `=IFERROR(SUM('Room Inventory'!D2:D), 0)`, "", ""]);
     sumData.push(["Assigned to Rooms", `=IFERROR(SUM('Room Inventory'!G2:G), 0)`, "", ""]);
+    if (ss.getSheetByName("Lodging")) {
+      sumData.push(["Awaiting Room Assignment (Unassigned on Lodging)", `=IFERROR(COUNTIFS(Lodging!A2:A, "<>", INDEX(Lodging!A2:ZZ, 0, MATCH("Status", Lodging!1:1, 0)), "<>CANCELLED", INDEX(Lodging!A2:ZZ, 0, MATCH("Status", Lodging!1:1, 0)), "<>WAITLISTED", INDEX(Lodging!A2:ZZ, 0, MATCH("Room Assignment", Lodging!1:1, 0)), ""), 0)`, "", ""]);
+    }
     sumData.push(["Remaining Room Capacity", `=IFERROR(SUM('Room Inventory'!H2:H), 0)`, "", ""]);
     sumData.push(["", "", "", ""]);
   }
@@ -1327,6 +1630,25 @@ function setupSummaryDashboard(ss, selectedFieldNames) {
         summarySheet.getRange(3+i, 1, 1, 4).setBackground("#f3f3f3").setFontColor("#333333");
      } else if (sumData[i][0] === "Sleep Preferences") {
         summarySheet.getRange(3+i, 1, 1, 4).setBackground("#f3f3f3").setFontColor("#333333").setFontWeight("bold");
+     } else if (sumData[i][0] === "Unreviewed Registration Changes (Change Log)" || sumData[i][0] === "Awaiting Room Assignment (Unassigned on Lodging)") {
+        const cell = summarySheet.getRange(3+i, 2);
+        const rules = summarySheet.getConditionalFormatRules() || [];
+        rules.push(
+          SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0)
+            .setBackground("#fce8e6")
+            .setFontColor("#c5221f")
+            .setBold(true)
+            .setRanges([cell])
+            .build(),
+          SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberEqualTo(0)
+            .setBackground("#e6f4ea")
+            .setFontColor("#137333")
+            .setRanges([cell])
+            .build()
+        );
+        summarySheet.setConditionalFormatRules(rules);
      }
   }
 
@@ -2143,6 +2465,8 @@ function generateForm(payload) { try {
   setupLogisticsSheet(responseSs, selectedNames);
   const lodgingSheet = setupLodgingSheet(responseSs, selectedNames);
   setupRoomInventorySheet(responseSs, lodgingSheet, false);
+  setupCheckInSheet(responseSs);
+  setupChangeLogSheet(responseSs, false);
   setupSummaryDashboard(responseSs, selectedNames);
   
   const hasAirportFields = arrivalDetailsItem || departureSection || payload.selectedFields.some(f => f.name.includes('City/Airport'));
@@ -2922,12 +3246,15 @@ function masterRespondToRegistration(e) {
     sheet.getRange(row, statusColIndex).setValue(prelimStatus);
 
     // ----------------------------------------------------
-    // Operational Sheets Update (Pickup, Drop-Off, Logistics, Lodging)
+    // Operational Sheets Update (Pickup, Drop-Off, Logistics, Lodging, Check-In, Change Log)
     // ----------------------------------------------------
     let arrDetails = "", arrDate = "", arrTime = "", depCity = "", arrCity = "", arrAirline = "", arrFlight = "";
     let arrTrainStation = "", arrCarrier = "", arrTrainNumber = "";
     let depDetails = "", depDate = "", depTime = "", depCityOut = "", depAirline = "", depFlight = "", destCity = "";
     let depTrainStation = "", depCarrier = "", depTrainNumber = "";
+    let localChurchVal = "", exactLodgingDatesVal = "", lodgingBeforeVal = "", lodgingAfterVal = "";
+    const changeLogEntries = [];
+    const fullParticipantName = `${firstName} ${lastName}`.trim();
 
     for (let header in responses) {
       let hLower = header.toLowerCase();
@@ -2953,6 +3280,10 @@ function masterRespondToRegistration(e) {
       else if (hLower.includes("departure train") || (hLower.includes("departure") && hLower.includes("station"))) depTrainStation = val;
       else if (hLower.includes("departure carrier")) depCarrier = val;
       else if (hLower.includes("departure train/bus number") || (hLower.includes("departure") && hLower.includes("bus number"))) depTrainNumber = val;
+      else if (hLower.includes("local church") || hLower.includes("fellowship")) localChurchVal = val;
+      else if (hLower.includes("exact dates") || hLower.includes("exact lodging dates")) exactLodgingDatesVal = val;
+      else if (hLower.includes("lodging before")) lodgingBeforeVal = val;
+      else if (hLower.includes("lodging after")) lodgingAfterVal = val;
     }
 
     // Pickup Sheet
@@ -2975,11 +3306,19 @@ function masterRespondToRegistration(e) {
 
       if (isRejected) {
         if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+          const oldDriver = String(data[foundRowIndex - 1][15] || "").trim();
           pickupSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
           pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
                      .setFontLine("line-through")
                      .setBackground("#f4cccc")
                      .setFontColor("#666666");
+          changeLogEntries.push({
+            participantName: fullParticipantName,
+            email: emailRecipient,
+            category: "Pickup Cancelled",
+            summary: "Registration rejected/cancelled (Medical Consent = No).",
+            impactedAssignment: oldDriver ? `Assigned Driver: ${oldDriver}` : "No driver assigned"
+          });
         }
       } else if (needsPickup) {
         let flightStatus = isWaitlisted ? "WAITLISTED" : "Active";
@@ -3012,9 +3351,25 @@ function masterRespondToRegistration(e) {
             flightStatus = "Active";
           } else if (changed) {
             flightStatus = "UPDATED";
+            const oldDriver = String(oldRow[15] || "").trim();
+            changeLogEntries.push({
+              participantName: fullParticipantName,
+              email: emailRecipient,
+              category: "Pickup Updated",
+              summary: `Arrival changed: ${oldRow[5]} ${oldRow[6]} (${oldRow[10] || oldRow[13] || "Transit"}) → ${arrDate} ${arrTime} (${arrFlight || arrTrainNumber || "Transit"})`,
+              impactedAssignment: oldDriver ? `Assigned Driver: ${oldDriver}` : "No driver assigned yet"
+            });
           } else {
             flightStatus = oldRow[statusIdx] || "Active";
           }
+        } else if (isEdit) {
+          changeLogEntries.push({
+            participantName: fullParticipantName,
+            email: emailRecipient,
+            category: "Pickup Added",
+            summary: `Added arrival pickup request: ${arrDate} ${arrTime} (${arrFlight || arrTrainNumber || arrDetails})`,
+            impactedAssignment: "Needs Driver Assignment"
+          });
         }
 
         let newRowData;
@@ -3044,11 +3399,20 @@ function masterRespondToRegistration(e) {
           }
         }
       } else if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+        const oldRow = data[foundRowIndex - 1];
+        const oldDriver = String(oldRow[15] || "").trim();
         pickupSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
         pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
                    .setFontLine("line-through")
                    .setBackground("#f4cccc")
                    .setFontColor("#666666");
+        changeLogEntries.push({
+          participantName: fullParticipantName,
+          email: emailRecipient,
+          category: "Pickup Cancelled",
+          summary: `Switched arrival from pickup (${oldRow[5]} ${oldRow[6]}) to "${arrDetails || "No pickup needed"}"`,
+          impactedAssignment: oldDriver ? `⚠️ Driver Assigned: ${oldDriver}` : "No driver assigned"
+        });
       }
 
       if (pickupSheet.getLastRow() > 1) {
@@ -3077,11 +3441,19 @@ function masterRespondToRegistration(e) {
 
       if (isRejected) {
         if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+          const oldDriver = String(data[foundRowIndex - 1][15] || "").trim();
           dropoffSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
           dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
                      .setFontLine("line-through")
                      .setBackground("#f4cccc")
                      .setFontColor("#666666");
+          changeLogEntries.push({
+            participantName: fullParticipantName,
+            email: emailRecipient,
+            category: "Drop-Off Cancelled",
+            summary: "Registration rejected/cancelled (Medical Consent = No).",
+            impactedAssignment: oldDriver ? `Assigned Driver: ${oldDriver}` : "No driver assigned"
+          });
         }
       } else if (needsDropoff) {
         let flightStatus = isWaitlisted ? "WAITLISTED" : "Active";
@@ -3115,9 +3487,25 @@ function masterRespondToRegistration(e) {
           } else if (changed) {
             let ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yy h:mm a");
             flightStatus = "Updated " + ts;
+            const oldDriver = String(oldRow[15] || "").trim();
+            changeLogEntries.push({
+              participantName: fullParticipantName,
+              email: emailRecipient,
+              category: "Drop-Off Updated",
+              summary: `Departure changed: ${oldRow[5]} ${oldRow[6]} (${oldRow[9] || oldRow[13] || "Transit"}) → ${depDate} ${depTime} (${depFlight || depTrainNumber || "Transit"})`,
+              impactedAssignment: oldDriver ? `Assigned Driver: ${oldDriver}` : "No driver assigned yet"
+            });
           } else {
             flightStatus = oldRow[statusIdx] || "Active";
           }
+        } else if (isEdit) {
+          changeLogEntries.push({
+            participantName: fullParticipantName,
+            email: emailRecipient,
+            category: "Drop-Off Added",
+            summary: `Added departure drop-off request: ${depDate} ${depTime} (${depFlight || depTrainNumber || depDetails})`,
+            impactedAssignment: "Needs Driver Assignment"
+          });
         }
 
         let updateData;
@@ -3150,11 +3538,20 @@ function masterRespondToRegistration(e) {
           }
         }
       } else if (foundRowIndex !== -1 && data[foundRowIndex - 1][statusIdx] !== "CANCELLED") {
+        const oldRow = data[foundRowIndex - 1];
+        const oldDriver = String(oldRow[15] || "").trim();
         dropoffSheet.getRange(foundRowIndex, statusIdx + 1).setValue("CANCELLED");
         dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
                    .setFontLine("line-through")
                    .setBackground("#f4cccc") 
                    .setFontColor("#666666"); 
+        changeLogEntries.push({
+          participantName: fullParticipantName,
+          email: emailRecipient,
+          category: "Drop-Off Cancelled",
+          summary: `Switched departure from drop-off (${oldRow[5]} ${oldRow[6]}) to "${depDetails || "No drop-off needed"}"`,
+          impactedAssignment: oldDriver ? `⚠️ Driver Assigned: ${oldDriver}` : "No driver assigned"
+        });
       }
 
       if (dropoffSheet.getLastRow() > 1) {
@@ -3269,6 +3666,9 @@ function masterRespondToRegistration(e) {
       }
       const needsLodging = hasStayingField ? isStayingAtChurchResponse(stayingVal) : true;
       const statusIdx = lodgHeaders.indexOf("Status");
+      const roomAssignIdx = lodgHeaders.indexOf("Room Assignment");
+      const bedSpotIdx = lodgHeaders.indexOf("Bed / Spot");
+      const lodgNotesIdx = lodgHeaders.indexOf("Lodging Notes");
       let lodgAutoColCount = lodgHeaders.length;
       if (lodgHeaders.includes("Room Assignment")) {
         lodgAutoColCount = lodgHeaders.indexOf("Room Assignment");
@@ -3276,11 +3676,32 @@ function masterRespondToRegistration(e) {
 
       if (isRejected) {
         if (foundLodgRowIndex !== -1 && statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] !== "CANCELLED") {
+          const oldRow = lodgData[foundLodgRowIndex - 1];
+          const prevRoom = roomAssignIdx !== -1 ? String(oldRow[roomAssignIdx] || "").trim() : "";
+          const prevBed = bedSpotIdx !== -1 ? String(oldRow[bedSpotIdx] || "").trim() : "";
+          const prevNotes = lodgNotesIdx !== -1 ? String(oldRow[lodgNotesIdx] || "").trim() : "";
+          const tsShort = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd");
+
           lodgingSheet.getRange(foundLodgRowIndex, statusIdx + 1).setValue("CANCELLED");
+          if (prevRoom && roomAssignIdx !== -1) {
+            lodgingSheet.getRange(foundLodgRowIndex, roomAssignIdx + 1).setValue("");
+            if (bedSpotIdx !== -1) lodgingSheet.getRange(foundLodgRowIndex, bedSpotIdx + 1).setValue("");
+            if (lodgNotesIdx !== -1) {
+              const releaseNote = `[Cancelled on ${tsShort} — Previously assigned to: ${prevRoom}${prevBed ? " (" + prevBed + ")" : ""}]`;
+              lodgingSheet.getRange(foundLodgRowIndex, lodgNotesIdx + 1).setValue(prevNotes ? `${releaseNote} ${prevNotes}` : releaseNote);
+            }
+          }
           lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
                       .setFontLine("line-through")
                       .setBackground("#f4cccc")
                       .setFontColor("#666666");
+          changeLogEntries.push({
+            participantName: fullParticipantName,
+            email: emailRecipient,
+            category: "Lodging Cancelled",
+            summary: "Registration rejected/cancelled (Medical Consent = No).",
+            impactedAssignment: prevRoom ? `⚠️ Room Released: ${prevRoom}${prevBed ? " (" + prevBed + ")" : ""}` : "No room assigned"
+          });
         }
       } else if (needsLodging) {
         const newLodgRowData = [];
@@ -3323,24 +3744,54 @@ function masterRespondToRegistration(e) {
           const oldRow = lodgData[foundLodgRowIndex - 1];
           const watchHeaders = ["Lodging Before", "Lodging After", "Exact Lodging Dates", "Sleeping Bag/Pillow", "Sleep Preferences & Habits", "Other Special Needs"];
           let changed = false;
+          const changedDiffs = [];
           for (const wh of watchHeaders) {
             const idx = lodgHeaders.indexOf(wh);
             if (idx !== -1 && idx < lodgAutoColCount) {
-              if (String(oldRow[idx] || "").trim() !== String(newLodgRowData[idx] || "").trim()) {
+              const oldValStr = String(oldRow[idx] || "").trim();
+              const newValStr = String(newLodgRowData[idx] || "").trim();
+              if (oldValStr !== newValStr) {
                 changed = true;
-                break;
+                changedDiffs.push(`${wh}: "${oldValStr || "None"}" → "${newValStr || "None"}"`);
               }
             }
           }
+          const prevRoom = roomAssignIdx !== -1 ? String(oldRow[roomAssignIdx] || "").trim() : "";
+          const prevBed = bedSpotIdx !== -1 ? String(oldRow[bedSpotIdx] || "").trim() : "";
+
           if (isWaitlisted) {
             lodgStatus = "WAITLISTED";
           } else if (oldRow[statusIdx] === "CANCELLED" || oldRow[statusIdx] === "WAITLISTED") {
             lodgStatus = "Active";
+            if (oldRow[statusIdx] === "CANCELLED") {
+              changeLogEntries.push({
+                participantName: fullParticipantName,
+                email: emailRecipient,
+                category: "Lodging Re-Requested",
+                summary: "Participant switched back to requesting Host Church Lodging.",
+                impactedAssignment: "Needs Room Assignment"
+              });
+            }
           } else if (changed) {
             lodgStatus = "UPDATED";
+            changeLogEntries.push({
+              participantName: fullParticipantName,
+              email: emailRecipient,
+              category: "Lodging Updated",
+              summary: changedDiffs.join("; "),
+              impactedAssignment: prevRoom ? `Assigned Room: ${prevRoom}${prevBed ? " (" + prevBed + ")" : ""}` : "Unassigned"
+            });
           } else {
             lodgStatus = oldRow[statusIdx] || "Active";
           }
+        } else if (isEdit) {
+          changeLogEntries.push({
+            participantName: fullParticipantName,
+            email: emailRecipient,
+            category: "Lodging Added",
+            summary: `Switched from Self-Arranged to Host Church Lodging (${stayingVal || "Yes"}).`,
+            impactedAssignment: "Needs Room Assignment"
+          });
         }
         if (statusIdx !== -1 && statusIdx < lodgAutoColCount) {
           newLodgRowData[statusIdx] = lodgStatus;
@@ -3371,17 +3822,93 @@ function masterRespondToRegistration(e) {
           }
         }
       } else if (foundLodgRowIndex !== -1 && statusIdx !== -1 && lodgData[foundLodgRowIndex - 1][statusIdx] !== "CANCELLED") {
+        // Enhancement B & C: Participant switched from Host Church Lodging to Self-Arranged
+        const oldRow = lodgData[foundLodgRowIndex - 1];
+        const prevRoom = roomAssignIdx !== -1 ? String(oldRow[roomAssignIdx] || "").trim() : "";
+        const prevBed = bedSpotIdx !== -1 ? String(oldRow[bedSpotIdx] || "").trim() : "";
+        const prevNotes = lodgNotesIdx !== -1 ? String(oldRow[lodgNotesIdx] || "").trim() : "";
+        const tsShort = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd");
+
         lodgingSheet.getRange(foundLodgRowIndex, statusIdx + 1).setValue("CANCELLED");
+        if (prevRoom && roomAssignIdx !== -1) {
+          // Clear Room Assignment & Bed/Spot so dropdown is clean and record previous room in Lodging Notes
+          lodgingSheet.getRange(foundLodgRowIndex, roomAssignIdx + 1).setValue("");
+          if (bedSpotIdx !== -1) lodgingSheet.getRange(foundLodgRowIndex, bedSpotIdx + 1).setValue("");
+          if (lodgNotesIdx !== -1) {
+            const releaseNote = `[Cancelled Church Lodging on ${tsShort} — Previously assigned to: ${prevRoom}${prevBed ? " (" + prevBed + ")" : ""}]`;
+            lodgingSheet.getRange(foundLodgRowIndex, lodgNotesIdx + 1).setValue(prevNotes ? `${releaseNote} ${prevNotes}` : releaseNote);
+          }
+        } else if (lodgNotesIdx !== -1) {
+          const releaseNote = `[Switched to Self-Arranged Lodging on ${tsShort}]`;
+          if (!prevNotes.includes(releaseNote)) {
+            lodgingSheet.getRange(foundLodgRowIndex, lodgNotesIdx + 1).setValue(prevNotes ? `${releaseNote} ${prevNotes}` : releaseNote);
+          }
+        }
         lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
                     .setFontLine("line-through")
                     .setBackground("#f4cccc")
                     .setFontColor("#666666");
+        changeLogEntries.push({
+          participantName: fullParticipantName,
+          email: emailRecipient,
+          category: "Lodging Cancelled",
+          summary: `Switched from Host Church Lodging to "${stayingVal || "Self-Arranged Lodging"}".`,
+          impactedAssignment: prevRoom ? `⚠️ Room Released: ${prevRoom}${prevBed ? " (" + prevBed + ")" : ""}` : "No room was assigned yet"
+        });
       }
 
       if (lodgingSheet.getLastRow() > 1) {
         lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn())
                     .sort([{column: 2, ascending: true}]);
       }
+    }
+
+    // Printable Check-In Sheet Update
+    const checkInSheet = responseSs.getSheetByName("Check-In");
+    if (checkInSheet) {
+      const ciData = checkInSheet.getDataRange().getValues();
+      let foundCiRow = -1;
+      for (let i = 1; i < ciData.length; i++) {
+        // Col 4 = First Name (idx 3), Col 3 = Last Name (idx 2), Col 10 = Email (idx 9)
+        if (matchesParticipantRecord(ciData[i][3], ciData[i][2], ciData[i][9], firstName, lastName, emailRecipient)) {
+          foundCiRow = i + 1;
+          break;
+        }
+      }
+      const arrivalSummary = buildArrivalSummaryText(arrDetails, arrDate, arrTime, exactLodgingDatesVal, lodgingBeforeVal, isRejected);
+      if (foundCiRow !== -1) {
+        // Update Columns C..F (Last Name, First Name, Local Church, Arrival Date & Mode) and Col J (Email) while preserving Checkboxes (A, B), Formulas (G, H), and Notes (I)
+        checkInSheet.getRange(foundCiRow, 3, 1, 4).setValues([[lastName, firstName, localChurchVal, arrivalSummary]]);
+        checkInSheet.getRange(foundCiRow, 10).setValue(emailRecipient);
+        if (isRejected) {
+          checkInSheet.getRange(foundCiRow, 1, 1, 10).setFontLine("line-through").setBackground("#f4cccc").setFontColor("#666666");
+        }
+      } else if (!isRejected && !isWaitlisted) {
+        const cbRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+        checkInSheet.appendRow([
+          false,
+          false,
+          lastName,
+          firstName,
+          localChurchVal,
+          arrivalSummary,
+          getCheckInRoomLookupFormula(),
+          getCheckInGroupLookupFormula(),
+          "",
+          emailRecipient
+        ]);
+        const newCiRow = checkInSheet.getLastRow();
+        checkInSheet.getRange(newCiRow, 1, 1, 2).setDataValidation(cbRule).setHorizontalAlignment("center");
+      }
+      if (checkInSheet.getLastRow() > 1) {
+        checkInSheet.getRange(2, 1, checkInSheet.getLastRow() - 1, checkInSheet.getLastColumn())
+                    .sort([{column: 3, ascending: true}, {column: 4, ascending: true}]);
+      }
+    }
+
+    // Record any registration changes to Change Log (Enhancement C)
+    if (changeLogEntries.length > 0) {
+      logRegistrationChanges(responseSs, changeLogEntries);
     }
 
     // Public transport sync only for confirmed, non-rejected registrants
@@ -5021,11 +5548,14 @@ function upgradeExistingSheet() {
      lodgingSheet.getRange(2, 1, lodgingSheet.getLastRow() - 1, lodgingSheet.getLastColumn()).sort([{column: 2, ascending: true}]);
   }
 
-  // 8. Create Airport Summary Sheet
+  // 8. Set up Printable Check-In & Change Log Sheets and refresh Summary Dashboard
+  syncCheckInAndChangeLogForSheet(ss);
+
+  // 9. Create Airport Summary Sheet
   const hasAirport = selectedNames.some(n => n.includes("Arrival City/Airport") || n.includes("Departure City/Airport") || n.includes("Arrival Details") || n.includes("Departure Details"));
   setupAirportSummarySheet(ss, hasAirport);
 
-  ui.alert('Success', 'Spreadsheet successfully upgraded with dedicated Lodging and Room Inventory tabs!', ui.ButtonSet.OK);
+  ui.alert('Success', 'Spreadsheet successfully upgraded with dedicated Lodging, Room Inventory, Printable Check-In, and Change Log tabs!', ui.ButtonSet.OK);
 }
 
 /**
@@ -5243,14 +5773,175 @@ function syncLodgingAndRoomsForSheet(targetSs) {
                 .sort([{column: 2, ascending: true}]);
   }
 
-  // Refresh Summary Dashboard so Room Inventory capacity metrics are included
+  // Also set up / sync Printable Check-In and Change Log tabs
+  const checkInRes = syncCheckInAndChangeLogForSheet(targetSs);
+
+  // Refresh Summary Dashboard so Room Inventory, Check-In, and Change Log metrics are included
   setupSummaryDashboard(targetSs, selectedNames);
 
   return {
     success: true,
     lodgingCount: lodgingCount,
     migratedRoomCount: migratedRoomCount,
-    message: `Successfully set up & synchronized the "Lodging" and "Room Inventory" sheets!\n\n• Synced ${lodgingCount} church-lodging participant(s) to "Lodging".\n• Preserved/migrated ${migratedRoomCount} room assignment(s).\n• Linked "Room Assignment" dropdowns and live capacity formulas to "Room Inventory".`
+    checkInCount: checkInRes.checkInCount || 0,
+    message: `Successfully set up & synchronized the "Lodging", "Room Inventory", "Check-In", and "Change Log" sheets!\n\n• Synced ${lodgingCount} church-lodging participant(s) to "Lodging".\n• Preserved/migrated ${migratedRoomCount} room assignment(s).\n• Synced ${checkInRes.checkInCount || 0} attendee(s) to the printable "Check-In" sheet.\n• Linked "Room Assignment" dropdowns, live capacity formulas, and "Change Log" tracking.`
+  };
+}
+
+/**
+ * Menu handler to set up or synchronize the Printable Check-In and Change Log tabs on an existing event sheet.
+ */
+function syncCheckInAndChangeLogMenu() {
+  const ui = SpreadsheetApp.getUi();
+  const prompt = ui.prompt(
+    'Setup / Sync Printable Check-In & Change Log Tabs',
+    'Enter the Google Sheet URL of the event response spreadsheet (or leave blank if running inside the event sheet):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (prompt.getSelectedButton() !== ui.Button.OK) return;
+  const url = prompt.getResponseText().trim();
+
+  let targetSs;
+  try {
+    targetSs = url ? SpreadsheetApp.openByUrl(url) : SpreadsheetApp.getActiveSpreadsheet();
+  } catch (err) {
+    ui.alert('Error', 'Could not open spreadsheet. Please check the URL and permissions: ' + err.message, ui.ButtonSet.OK);
+    return;
+  }
+
+  const result = syncCheckInAndChangeLogForSheet(targetSs);
+  if (result.success) {
+    ui.alert('Success', result.message, ui.ButtonSet.OK);
+  } else {
+    ui.alert('Error', result.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Core non-destructive initializer/synchronizer for the Printable Check-In and Change Log tabs.
+ * Preserves existing Checked In / Welcome Gift checkboxes, Check-In Notes, and Change Log history.
+ */
+function syncCheckInAndChangeLogForSheet(targetSs) {
+  const responsesSheet = targetSs.getSheetByName("Form Responses 1");
+  if (!responsesSheet) {
+    return { success: false, message: 'Could not find "Form Responses 1" tab in this spreadsheet.' };
+  }
+
+  const respData = responsesSheet.getDataRange().getDisplayValues();
+  if (respData.length < 1) {
+    return { success: false, message: 'The "Form Responses 1" sheet contains no headers.' };
+  }
+
+  const selectedNames = respData[0].map(h => String(h).trim()).filter(Boolean);
+
+  // Preserve any existing check-in checkboxes & notes
+  const savedCheckInMap = {};
+  const existingCiSheet = targetSs.getSheetByName("Check-In");
+  if (existingCiSheet && existingCiSheet.getLastRow() > 1) {
+    const ciVals = existingCiSheet.getDataRange().getValues();
+    for (let r = 1; r < ciVals.length; r++) {
+      const row = ciVals[r];
+      const lName = String(row[2] || "").trim().toLowerCase();
+      const fName = String(row[3] || "").trim().toLowerCase();
+      const email = String(row[9] || "").trim().toLowerCase();
+      const nameKey = `${fName}_${lName}`;
+      const entry = {
+        checkedIn: row[0] === true,
+        welcomeGift: row[1] === true,
+        notes: String(row[8] || "").trim()
+      };
+      if (email && fName) savedCheckInMap[`${email}_${nameKey}`] = entry;
+      if (nameKey) savedCheckInMap[nameKey] = entry;
+    }
+  }
+
+  const checkInSheet = setupCheckInSheet(targetSs);
+  setupChangeLogSheet(targetSs, true);
+
+  // Deduplicate Form Responses 1 so if a participant submitted or edited, the latest active record is used
+  const participantRecords = [];
+  const recordIndexMap = {};
+
+  if (respData.length > 1) {
+    const hRow = respData[0];
+    for (let r = 1; r < respData.length; r++) {
+      const rowData = respData[r];
+      const responses = {};
+      for (let i = 0; i < hRow.length; i++) {
+        responses[String(hRow[i])] = [String(rowData[i])];
+      }
+
+      let emailRecipient = (responses["Email Address"] && responses["Email Address"][0]) ? responses["Email Address"][0] : "";
+      let firstName = "Registrant", lastName = "", localChurch = "", arrDetails = "", arrDate = "", arrTime = "";
+      let exactLodgingDates = "", lodgingBefore = "", medicalConsent = "", emailStatus = "";
+
+      for (const header in responses) {
+        const hLower = header.toLowerCase();
+        const val = String(responses[header][0] || "").trim();
+        if (!emailRecipient && hLower.includes("email") && !hLower.includes("minor") && hLower !== "email status") emailRecipient = val;
+        if (hLower.includes("first name") && val) firstName = val;
+        else if (hLower.includes("last name")) lastName = val;
+        else if (hLower.includes("local church") || hLower.includes("fellowship")) localChurch = val;
+        else if (hLower.includes("arrival details") || hLower.includes("arrival arrangements") || hLower.includes("arriving by")) arrDetails = val;
+        else if (hLower.includes("arrival date")) arrDate = val;
+        else if (hLower.includes("arrival time")) arrTime = val;
+        else if (hLower.includes("exact dates") || hLower.includes("exact lodging dates")) exactLodgingDates = val;
+        else if (hLower.includes("lodging before")) lodgingBefore = val;
+        else if (hLower.includes("medical consent") || hLower.includes("liability release")) medicalConsent = val;
+        else if (hLower === "email status") emailStatus = val;
+      }
+
+      if (!emailRecipient && firstName === "Registrant" && !lastName) continue;
+      if (medicalConsent.toLowerCase().startsWith("no") || emailStatus.startsWith("Rejected") || emailStatus.startsWith("Waitlist")) continue;
+
+      const compositeKey = `${emailRecipient.toLowerCase().trim()}_${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
+      const arrivalSummary = buildArrivalSummaryText(arrDetails, arrDate, arrTime, exactLodgingDates, lodgingBefore, false);
+      const nameKey = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
+      const saved = savedCheckInMap[`${emailRecipient.toLowerCase().trim()}_${nameKey}`] || savedCheckInMap[nameKey] || { checkedIn: false, welcomeGift: false, notes: "" };
+
+      const ciRow = [
+        saved.checkedIn,
+        saved.welcomeGift,
+        lastName,
+        firstName,
+        localChurch,
+        arrivalSummary,
+        getCheckInRoomLookupFormula(),
+        getCheckInGroupLookupFormula(),
+        saved.notes,
+        emailRecipient
+      ];
+
+      if (recordIndexMap[compositeKey] !== undefined) {
+        participantRecords[recordIndexMap[compositeKey]] = ciRow;
+      } else {
+        recordIndexMap[compositeKey] = participantRecords.length;
+        participantRecords.push(ciRow);
+      }
+    }
+  }
+
+  // Sort alphabetically by Last Name (col idx 2), then First Name (col idx 3)
+  participantRecords.sort((a, b) => {
+    const cmpLast = String(a[2] || "").localeCompare(String(b[2] || ""));
+    if (cmpLast !== 0) return cmpLast;
+    return String(a[3] || "").localeCompare(String(b[3] || ""));
+  });
+
+  if (participantRecords.length > 0) {
+    checkInSheet.getRange(2, 1, participantRecords.length, participantRecords[0].length).setValues(participantRecords);
+    const cbRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+    checkInSheet.getRange(2, 1, participantRecords.length, 2).setDataValidation(cbRule).setHorizontalAlignment("center");
+    // Set generous 28px row height for easy handwritten or tablet check-in
+    checkInSheet.setRowHeights(2, participantRecords.length, 28);
+  }
+
+  setupSummaryDashboard(targetSs, selectedNames);
+
+  return {
+    success: true,
+    checkInCount: participantRecords.length,
+    message: `Successfully set up & synchronized the Printable "Check-In" (${participantRecords.length} attendees) and "Change Log" tabs!`
   };
 }
 

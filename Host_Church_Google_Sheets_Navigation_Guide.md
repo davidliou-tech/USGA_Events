@@ -14,7 +14,9 @@ Your event spreadsheet contains several specialized tabs. Each tab serves a dedi
 | :--- | :--- | :--- |
 | **`Room Inventory`** | **Facility & Sleeping Arrangements Planner:** Enter your building names, room names, gender designations, and max capacities. Automatically tracks assigned occupants and remaining capacity. | Host Church Lodging Coordinator |
 | **`Lodging`** | **Dedicated Church Lodging Roster:** Filtered to *only* participants staying at the host church. Contains sleep habits, lodging dates, bedding requests, and room assignment dropdowns. | Host Church Lodging Team |
-| **`Logistics`** | **General On-Site Roster & Grouping:** Master list of all attendees for event check-in, dietary restrictions, special needs, emergency contacts, and discussion `Group/Team` assignments. | General Coordinator, Food / Kitchen Team, Program Leads |
+| **`Check-In`** | **Printable Welcome Desk Roster:** Print-ready check-in sheet with `Checked In` and `Welcome Gift` checkboxes, consolidated `Arrival Date & Mode`, live `Lodging / Room Assignment` lookup, and `Group / Team`. | Welcome Table & Hospitality Team |
+| **`Change Log`** | **Registration Update & Cancellation Audit Trail:** Tracks when a participant changes their lodging or transit plans (especially if they cancel church lodging after a room was already prepared), with a `Reviewed?` checkbox. | Host Church Coordinators |
+| **`Logistics`** | **General On-Site Roster & Grouping:** Master list of all attendees with dietary restrictions, special needs, emergency contacts, and discussion `Group/Team` assignments. | General Coordinator, Food / Kitchen Team, Program Leads |
 | **`Pickup`** | **Inbound Airport & Transit Roster (private):** Flight, train, and bus arrivals sorted chronologically. Shows driver claims synced from the public signup sheet, a `Coordinator Status` dropdown, and a copy-ready dispatch text per run. | Transportation Coordinator |
 | **`Drop-Off`** | **Outbound Airport & Transit Roster (private):** Same layout as `Pickup` for departures. | Transportation Coordinator |
 | **`Driver Roster`** | **Volunteer Driver Summary:** Created by the transportation sync. Groups every run by driver name, with phone, run count, passenger count, and schedule. | Transportation Coordinator |
@@ -80,8 +82,12 @@ The **`Lodging`** tab is dedicated exclusively to rooming management.
 
 ### Key Behaviors:
 1. **Clean & Filtered:** Only participants who requested host church lodging are listed here. Registrants arranging their own hotel or transit do not appear on this sheet, keeping your list short and focused.
-2. **Cancellation Tracking:** If a registrant previously staying at the church edits their form to self-arranged lodging, their row is marked `CANCELLED` with a strikethrough (`#f4cccc`). Their spot is immediately released on `Room Inventory`.
-3. **Update Highlighting:** If a participant changes their arrival dates or sleep preferences, their status highlights in soft yellow as `UPDATED`.
+2. **Unassigned Room Highlighting:** Active participants who have not yet been assigned a room have their `Room Assignment` cell highlighted in soft yellow (`#fef7e0`), and `Summary Dashboard` displays a live **`Awaiting Room Assignment (Unassigned on Lodging)`** counter so no one is ever missed.
+3. **Automatic Room Release & Audit Note on Cancellation:** If a registrant previously staying at the church edits their form to self-arranged lodging:
+   * Their row is marked `CANCELLED` with a red strikethrough (`#f4cccc`).
+   * If a room was already assigned to them, the script **automatically clears `Room Assignment` and `Bed / Spot`** to free the bed, writes `[Cancelled Church Lodging on MM/DD — Previously assigned to: Room X]` into **`Lodging Notes`**, and logs an alert in the **`Change Log`** tab so your hospitality team knows to remove any prepared bedding or welcome label.
+   * **Coordinator Override:** If a participant contacts the local church directly to cancel their church lodging (without editing their form), you can simply change their `Status` dropdown on `Lodging` to `CANCELLED` and clear their `Room Assignment`. Both `Room Inventory` and `Summary Dashboard` update immediately!
+4. **Update Highlighting:** If a participant changes their arrival dates or sleep preferences, their status highlights in soft yellow as `UPDATED` and an entry is added to `Change Log`.
 
 ### How to Assign Rooms on `Lodging`:
 At the right side of the sheet are the **Yellow Header manual columns**:
@@ -96,9 +102,30 @@ At the right side of the sheet are the **Yellow Header manual columns**:
 
 ---
 
-## 3. General Event Management: `Logistics` Sheet
+## 3. Printable Welcome Desk Roster & Change Tracking: `Check-In` and `Change Log`
 
-The **`Logistics`** tab is the general roster for on-site registration check-in, dining coordination, and workshop group assignments.
+### Printable `Check-In` Sheet
+The **`Check-In`** tab is formatted specifically to be **printed on standard 8.5" × 11" paper** (or used live on a tablet/laptop at the welcome table):
+* **Columns A & B (`Checked In` & `Welcome Gift` Checkboxes):** Check boxes by hand on paper or click them digitally as participants arrive and receive their welcome package/badge.
+* **Columns C – E (`Last Name`, `First Name`, `Local Church`):** Alphabetized by Last Name for fast lookup.
+* **Column F (`Arrival Date & Mode`):** Consolidates each participant's arrival date and travel mode (Flight, Train/Bus, Lodging arrival date, or Car) so you can filter by arrival day.
+* **Column G (`Lodging / Room Assignment` - Live Lookup):** Automatically pulls the participant's assigned room and bed spot from the `Lodging` tab:
+  * 🟢 **Green Badge:** Shows the exact assigned room (e.g., `Main Church - Room 101 (Bed 1)`).
+  * 🔴 **Red Alert (`⚠️ Unassigned (Needs Room)`):** Immediately warns you if someone requested church lodging but has not been assigned a room yet!
+  * ⚪ **Gray Badge (`Self / Hotel`):** Indicates the attendee is not staying at the host church.
+* **Column H (`Group / Team` - Live Lookup):** Automatically pulls the participant's fellowship group from `Logistics`.
+* **Column I (`Check-In Notes`):** Blank space for handwritten or typed notes at the welcome desk.
+
+### Registration `Change Log` Sheet
+Whenever a registered participant edits their registration (for example, cancelling church lodging after a room was already prepared, or changing flight times), a new row is logged in **`Change Log`**:
+* **Unreviewed Rows Highlighted in Soft Red:** Shows `Timestamp`, `Participant Name`, `Category` (e.g. `Lodging Cancelled`, `Lodging Updated`, `Pickup Updated`), `Change Summary (Before → After)`, and **`Previous Room / Driver Impacted`** (e.g. `⚠️ Room Released: Main Church - Room 102`).
+* **`Reviewed?` Checkbox (Column A):** Once your hospitality or transportation team has updated the room preparation or notified the driver, check the box in Column A. The row turns soft green and clears the `Unreviewed Registration Changes` alert counter on `Summary Dashboard`!
+
+---
+
+## 4. General Event Management: `Logistics` Sheet
+
+The **`Logistics`** tab is the general roster for dining coordination, medical/special needs, and workshop group assignments.
 
 ### What is on `Logistics`?
 * **Contact & Demographics:** First Name, Last Name, Email, Phone, Gender, Age, Age Group, Grade, Parent/Guardian, Local Church.
