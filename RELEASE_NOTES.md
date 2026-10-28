@@ -45,8 +45,15 @@ This document provides a complete, unified historical record of all versions, fe
       > *Proceed with "[Action Name]" on this event's response sheet?*  
       > **[YES]** &nbsp;&nbsp; **[NO]** &nbsp;&nbsp; **[CANCEL]**
     - Clicking **YES** immediately opens and executes the script on that spreadsheet (1-click action, zero copying).
-  - **Smart Chip & Rich Link Extraction (`extractSheetUrlFromCell`)**:
-    - Robustly resolves spreadsheet URLs from modern Google Drive/Sheets smart chips, rich text hyperlinks (`rt.getLinkUrl()` and runs), `=HYPERLINK("...", "...")` formulas, and raw URL strings in Column H.
+  - **Smart Chip & Rich Link Extraction Engine (`fetchSmartChipUrlsFromSheetsApi` & `resolveUrlFromRowData`)**:
+    - Addressed a core Google Sheets Apps Script platform limitation where modern Google Drive Smart Chips (e.g., green file pills in Column H) return `null` from `getRichTextValue().getLinkUrl()` and only display text from `getValue()`, which previously caused the resolver to fall back to a manual URL prompt.
+    - Implemented a resilient 4-tier resolution engine:
+      1. **Sheets REST API via `UrlFetchApp` (`chipRuns.richLinkProperties.uri`)**: Directly parses the underlying URI from the cell's `chipRuns` metadata in a single fast batch call across Column H.
+      2. **Drive File Search (`DriveApp.getFilesByName`)**: Searches Google Drive for spreadsheet files matching the Smart Chip's label text.
+      3. **Folder Inspection (Column I)**: Inspects the registration folder in Column I (supporting both raw folder URLs and Drive folder chips) and locates the response workbook inside it.
+      4. **Properties Service Cache (`FormsToMonitor`)**: Cross-references cached event titles and templates to retrieve previously registered sheet IDs.
+  - **Active Event Synchronization Hardening (`syncActiveEventsFromSystemLog`)**:
+    - Updated `syncActiveEventsFromSystemLog` to utilize the Smart Chip resolution engine, ensuring events with Smart Chips in Column H and Column I are seamlessly indexed and monitored rather than skipped.
   - **Smart Event Picker Fallback (`getEventsFromSystemLog`)**:
     - If invoked while on another tab (e.g., *Templates*, *Field Dictionary*), on the header row (row 1), or if the user clicks **NO** on the active row prompt, the system dynamically parses the **`System Log`** and presents a clean, numbered list of active events:
       > *Choose an event by entering its number (1–5), or paste any Google Sheet URL:*  
