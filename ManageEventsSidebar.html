@@ -158,12 +158,15 @@
         <button type="button" id="syncLodgingBtn" onclick="syncLodgingAndRoomsForCurrentEvent()" style="width: 100%; padding: 6px 8px; font-size: 11px; border-radius: 4px; border: 1px solid #34a853; background: #fff; color: #137333; font-weight: bold; cursor: pointer; margin-bottom: 8px;">
           🔄 Sync Lodging, Check-In & Change Log
         </button>
-        <div style="display: flex; gap: 4px;">
+        <div style="display: flex; gap: 4px; margin-bottom: 8px;">
           <input type="text" id="hostRoomSheetUrl" placeholder="Host Church Room Sheet URL..." style="font-size: 11px; padding: 4px 6px;">
           <button type="button" id="importRoomsBtn" onclick="importRoomsForCurrentEvent()" style="padding: 4px 8px; font-size: 11px; border-radius: 4px; border: 1px solid #137333; background: #137333; color: #fff; font-weight: bold; cursor: pointer; white-space: nowrap;">
             📥 Import
           </button>
         </div>
+        <button type="button" id="rebuildDashboardBtn" onclick="rebuildDashboardForCurrentEvent()" style="width: 100%; padding: 5px 8px; font-size: 11px; border-radius: 4px; border: 1px solid #34a853; background: #fff; color: #137333; font-weight: bold; cursor: pointer;">
+          📊 Rebuild Summary Dashboard
+        </button>
       </div>
 
       <!-- Host Church Transportation & Driver Management -->
@@ -642,6 +645,30 @@
             status.innerHTML = '<strong>Error:</strong> ' + err.message;
           })
           .importHostChurchRoomsForEvent(formId, sourceUrl);
+      }
+
+      function rebuildDashboardForCurrentEvent() {
+        const formId = document.getElementById('eventSelect').value;
+        if (!formId) return;
+        const btn = document.getElementById('rebuildDashboardBtn');
+        const status = document.getElementById('status');
+        btn.disabled = true;
+        status.className = 'loading';
+        status.innerHTML = '<span class="spinner"></span> Rebuilding Summary Dashboard with latest formulas...';
+        status.style.display = 'block';
+
+        google.script.run
+          .withSuccessHandler(function(res) {
+            btn.disabled = false;
+            status.className = 'success';
+            status.innerHTML = '<strong>Success!</strong> ' + (res ? res.message : 'Summary Dashboard rebuilt successfully.');
+          })
+          .withFailureHandler(function(err) {
+            btn.disabled = false;
+            status.className = 'error';
+            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+          })
+          .rebuildSummaryDashboardByFormId(formId);
       }
 
       function syncTransportationForCurrentEvent() {

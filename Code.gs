@@ -5219,29 +5219,328 @@ function computeDiffRichText(baselineStr, extractedStr) {
 }
 
 // ==========================================
+// TARGET EVENT SPREADSHEET RESOLVER
+// ==========================================
+
+/**
+ * Extracts a valid spreadsheet URL or ID from a spreadsheet cell.
+ * Robustly inspects RichText links (Smart Chips & Hyperlinks), formulas, and plain values.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Range} cell
+ * @returns {string}
+ */
+function extractSheetUrlFromCell(cell) {
+  if (!cell) return "";
+  
+  // 1. Inspect RichTextValue (handles Google Drive Smart Chips & formatted hyperlinks)
+  try {
+    const rt = cell.getRichTextValue();
+    if (rt) {
+      const linkUrl = rt.getLinkUrl();
+      if (linkUrl && linkUrl.startsWith("http")) return linkUrl.trim();
+      const runs = rt.getRuns();
+      if (runs && runs.length > 0) {
+        for (let i = 0; i < runs.length; i++) {
+          const runUrl = runs[i].getLinkUrl();
+          if (runUrl && runUrl.startsWith("http")) return runUrl.trim();
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log("extractSheetUrlFromCell richText check error: " + e.message);
+  }
+  
+  // 2. Inspect Formula for =HYPERLINK("...", "...")
+  try {
+    const formula = cell.getFormula();
+    if (formula) {
+      const match = formula.match(/HYPERLINK\(\s*"([^"]+)"/i);
+      if (match && match[1]) return match[1].trim();
+    }
+  } catch (e) {}
+
+  // 3. Inspect plain string value
+  const val = String(cell.getValue() || "").trim();
+  if (val.startsWith("http://") || val.startsWith("https://")) {
+    return val;
+  }
+  
+  return "";
+}
+
+/**
+ * Robustly opens a Google Spreadsheet given a URL, edit link, or standalone Sheet ID.
+ *
+ * @param {string} urlOrId
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+ */
+function openSpreadsheetFromUrlOrId(urlOrId) {
+  if (!urlOrId) return null;
+  const str = String(urlOrId).trim();
+  const match = str.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) {
+    return SpreadsheetApp.openById(match[1]);
+  }
+  if (str.length > 25 && !str.includes("/") && !str.includes(" ")) {
+    return SpreadsheetApp.openById(str);
+  }
+  return SpreadsheetApp.openByUrl(str);
+}
+
+/**
+ * Retrieves event metadata from a specific row in the System Log.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} logSheet
+ * @param {number} row
+ * @returns {{row: number, title: string, template: string, year: string, coordinator: string, sheetUrl: string}|null}
+ */
+function getEventFromSystemLogRow(logSheet, row) {
+  if (!logSheet || row < 2) return null;
+  const numCols = logSheet.getLastColumn();
+  if (numCols < 1) return null;
+  
+  const headers = logSheet.getRange(1, 1, 1, numCols).getValues()[0].map(h => String(h || "").trim());
+  const rowVals = logSheet.getRange(row, 1, 1, numCols).getValues()[0];
+  
+  const titleIdx = headers.indexOf("Event Title");
+  const templateIdx = headers.indexOf("Template Name");
+  const yearIdx = headers.indexOf("Event Year");
+  const coordIdx = headers.indexOf("Coordinator");
+  const respSsUrlIdx = headers.indexOf("Response Sheet URL");
+
+  let sheetUrl = "";
+  if (respSsUrlIdx !== -1) {
+    const cell = logSheet.getRange(row, respSsUrlIdx + 1);
+    sheetUrl = extractSheetUrlFromCell(cell);
+  }
+
+  const title = (titleIdx !== -1 && rowVals[titleIdx]) ? String(rowVals[titleIdx]).trim() :
+                ((templateIdx !== -1 && rowVals[templateIdx]) ? String(rowVals[templateIdx]).trim() : `Event at Row ${row}`);
+  const template = (templateIdx !== -1 && rowVals[templateIdx]) ? String(rowVals[templateIdx]).trim() : "";
+  const year = (yearIdx !== -1 && rowVals[yearIdx]) ? String(rowVals[yearIdx]).trim() : "";
+  const coordinator = (coordIdx !== -1 && rowVals[coordIdx]) ? String(rowVals[coordIdx]).trim() : "";
+
+  return {
+    row: row,
+    title: title,
+    template: template,
+    year: year,
+    coordinator: coordinator,
+    sheetUrl: sheetUrl
+  };
+}
+
+/**
+ * Retrieves all active (non-archived) events with response sheet URLs from the System Log.
+ *
+ * @returns {Array<{row: number, title: string, template: string, year: string, coordinator: string, sheetUrl: string}>}
+ */
+function getEventsFromSystemLog() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const logSheet = ss.getSheetByName("System Log");
+  if (!logSheet || logSheet.getLastRow() < 2) return [];
+
+  const lastRow = logSheet.getLastRow();
+  const lastCol = logSheet.getLastColumn();
+  const numRows = lastRow - 1;
+  const headers = logSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || "").trim());
+
+  const titleIdx = headers.indexOf("Event Title");
+  const templateIdx = headers.indexOf("Template Name");
+  const yearIdx = headers.indexOf("Event Year");
+  const coordIdx = headers.indexOf("Coordinator");
+  const respSsUrlIdx = headers.indexOf("Response Sheet URL");
+  const archiveStatusIdx = headers.indexOf("Archive Status");
+
+  if (respSsUrlIdx === -1) return [];
+
+  const values = logSheet.getRange(2, 1, numRows, lastCol).getValues();
+  const richTexts = logSheet.getRange(2, respSsUrlIdx + 1, numRows, 1).getRichTextValues();
+  const formulas = logSheet.getRange(2, respSsUrlIdx + 1, numRows, 1).getFormulas();
+
+  const events = [];
+  for (let i = 0; i < numRows; i++) {
+    const rowNum = i + 2;
+    const row = values[i];
+
+    if (archiveStatusIdx !== -1 && String(row[archiveStatusIdx]).toLowerCase().trim() === "archived") {
+      continue;
+    }
+
+    let url = "";
+    if (richTexts && richTexts[i] && richTexts[i][0]) {
+      url = richTexts[i][0].getLinkUrl() || "";
+      if (!url) {
+        const runs = richTexts[i][0].getRuns();
+        if (runs) {
+          for (let r = 0; r < runs.length; r++) {
+            if (runs[r].getLinkUrl()) {
+              url = runs[r].getLinkUrl();
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!url && formulas && formulas[i] && formulas[i][0]) {
+      const match = formulas[i][0].match(/HYPERLINK\(\s*"([^"]+)"/i);
+      if (match && match[1]) url = match[1];
+    }
+    if (!url && row[respSsUrlIdx]) {
+      const plainVal = String(row[respSsUrlIdx]).trim();
+      if (plainVal.startsWith("http")) url = plainVal;
+    }
+
+    if (!url) continue;
+
+    const title = (titleIdx !== -1 && row[titleIdx]) ? String(row[titleIdx]).trim() :
+                  ((templateIdx !== -1 && row[templateIdx]) ? String(row[templateIdx]).trim() : `Event at Row ${rowNum}`);
+    const template = (templateIdx !== -1 && row[templateIdx]) ? String(row[templateIdx]).trim() : "";
+    const year = (yearIdx !== -1 && row[yearIdx]) ? String(row[yearIdx]).trim() : "";
+    const coordinator = (coordIdx !== -1 && row[coordIdx]) ? String(row[coordIdx]).trim() : "";
+
+    events.push({
+      row: rowNum,
+      title: title,
+      template: template,
+      year: year,
+      coordinator: coordinator,
+      sheetUrl: url.trim()
+    });
+  }
+
+  return events;
+}
+
+/**
+ * Intelligent hybrid resolver for target event spreadsheets across all Advanced Maintenance and
+ * Transportation menu actions.
+ *
+ * 1. Active Event Sheet: If currently inside an event responses sheet, uses it directly.
+ * 2. Active Row Detection: If viewing the System Log, automatically detects the highlighted row's event and prompts to confirm.
+ * 3. Smart Picker Fallback: If not on an event row, presents a numbered list of events from the System Log (or allows pasting a custom URL).
+ *
+ * @param {GoogleAppsScript.Base.Ui} ui
+ * @param {string} actionTitle Name of the action being performed (e.g. "Rebuild Summary Dashboard")
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null} Target spreadsheet or null if aborted
+ */
+function resolveTargetEventSpreadsheet(ui, actionTitle) {
+  const activeSs = SpreadsheetApp.getActiveSpreadsheet();
+
+  // 1. Direct execution inside an Event Response Sheet
+  if (activeSs && !activeSs.getSheetByName("System Log") && !activeSs.getSheetByName("Templates") &&
+      (activeSs.getSheetByName("Form Responses 1") || activeSs.getSheetByName("Pickup") || activeSs.getSheetByName("Drop-Off") || activeSs.getSheetByName("Summary Dashboard"))) {
+    return activeSs;
+  }
+
+  // 2. Context-Aware Active Row Detection on "System Log"
+  const activeSheet = activeSs ? activeSs.getActiveSheet() : null;
+  if (activeSheet && activeSheet.getName() === "System Log") {
+    const selectedRow = activeSheet.getActiveRange().getRow();
+    if (selectedRow >= 2 && selectedRow <= activeSheet.getLastRow()) {
+      const activeEvent = getEventFromSystemLogRow(activeSheet, selectedRow);
+      if (activeEvent && activeEvent.sheetUrl) {
+        const choice = ui.alert(
+          actionTitle,
+          `Target Event Detected (System Log Row ${selectedRow}):\n\n` +
+          `• Event: ${activeEvent.title}\n` +
+          (activeEvent.template ? `• Template: ${activeEvent.template}\n` : "") +
+          (activeEvent.coordinator ? `• Coordinator: ${activeEvent.coordinator}\n` : "") +
+          `\nDo you want to run "${actionTitle}" on this event's response sheet?\n\n` +
+          `• Click YES to proceed with this event.\n` +
+          `• Click NO to select a different event from the list.\n` +
+          `• Click CANCEL to abort.`,
+          ui.ButtonSet.YES_NO_CANCEL
+        );
+
+        if (choice === ui.Button.YES) {
+          try {
+            return openSpreadsheetFromUrlOrId(activeEvent.sheetUrl);
+          } catch (e) {
+            ui.alert("Error", `Could not open spreadsheet for "${activeEvent.title}": ${e.message}`, ui.ButtonSet.OK);
+            return null;
+          }
+        } else if (choice === ui.Button.CANCEL) {
+          return null;
+        }
+        // If choice === NO, fall through to picker below!
+      }
+    }
+  }
+
+  // 3. Smart Event Picker Fallback
+  const events = getEventsFromSystemLog();
+  if (events.length > 0) {
+    let listText = "";
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      const yrText = ev.year ? ` [${ev.year}]` : "";
+      listText += `${i + 1}. [Row ${ev.row}] ${ev.title}${yrText}\n`;
+    }
+
+    const prompt = ui.prompt(
+      actionTitle,
+      `Choose an event by entering its number (1-${events.length}), or paste any Google Sheet URL:\n\n` +
+      listText +
+      `\nEnter number (1-${events.length}) or paste URL:`,
+      ui.ButtonSet.OK_CANCEL
+    );
+
+    if (prompt.getSelectedButton() !== ui.Button.OK) return null;
+    const input = prompt.getResponseText().trim();
+    if (!input) return null;
+
+    // Check if input is a number matching one of the events
+    const num = parseInt(input, 10);
+    if (!isNaN(num) && num >= 1 && num <= events.length && String(num) === input) {
+      const selectedEvent = events[num - 1];
+      try {
+        return openSpreadsheetFromUrlOrId(selectedEvent.sheetUrl);
+      } catch (e) {
+        ui.alert("Error", `Could not open spreadsheet for "${selectedEvent.title}": ${e.message}`, ui.ButtonSet.OK);
+        return null;
+      }
+    }
+
+    // Otherwise treat as URL or Sheet ID
+    try {
+      return openSpreadsheetFromUrlOrId(input);
+    } catch (err) {
+      ui.alert("Error", "Could not open spreadsheet. Please check the URL/ID or entered number: " + err.message, ui.ButtonSet.OK);
+      return null;
+    }
+  }
+
+  // 4. Default fallback if System Log has no events
+  const defaultPrompt = ui.prompt(
+    actionTitle,
+    "Enter the Google Sheet URL of the Event Response Spreadsheet:",
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (defaultPrompt.getSelectedButton() !== ui.Button.OK) return null;
+  const rawUrl = defaultPrompt.getResponseText().trim();
+  if (!rawUrl) return null;
+
+  try {
+    return openSpreadsheetFromUrlOrId(rawUrl);
+  } catch (err) {
+    ui.alert("Error", "Could not open spreadsheet. Please check the URL and permissions: " + err.message, ui.ButtonSet.OK);
+    return null;
+  }
+}
+
+// ==========================================
 // V2 UPGRADE TOOL
 // ==========================================
 
 function upgradeExistingSheet() {
   const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt('Upgrade Existing Sheet', 'Paste the URL of the existing Event Responses Spreadsheet:', ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  const url = response.getResponseText().trim();
-  
-  if (!url) return;
-  
-  let ss;
-  try {
-    ss = SpreadsheetApp.openByUrl(url);
-  } catch (e) {
-    ui.alert('Error', 'Could not open the spreadsheet. Please make sure the URL is correct and you have access.', ui.ButtonSet.OK);
-    return;
-  }
+  const ss = resolveTargetEventSpreadsheet(ui, 'Upgrade Existing Sheet (Full Sync)');
+  if (!ss) return;
   
   const responsesSheet = ss.getSheetByName('Form Responses 1');
   if (!responsesSheet) {
-    ui.alert('Error', 'Could not find "Form Responses 1" tab. Is this a valid Google Forms response sheet?', ui.ButtonSet.OK);
+    ui.alert('Error', `Could not find "Form Responses 1" tab in "${ss.getName()}". Is this a valid Google Forms response sheet?`, ui.ButtonSet.OK);
     return;
   }
   
@@ -5564,22 +5863,8 @@ function upgradeExistingSheet() {
  */
 function syncLodgingAndRoomsMenu() {
   const ui = SpreadsheetApp.getUi();
-  const prompt = ui.prompt(
-    'Setup / Sync Lodging & Room Inventory Tabs',
-    'Enter the Google Sheet URL of the event response spreadsheet:',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (prompt.getSelectedButton() !== ui.Button.OK) return;
-  const url = prompt.getResponseText().trim();
-  if (!url) return;
-
-  let targetSs;
-  try {
-    targetSs = SpreadsheetApp.openByUrl(url);
-  } catch (err) {
-    ui.alert('Error', 'Could not open spreadsheet. Please check the URL and permissions: ' + err.message, ui.ButtonSet.OK);
-    return;
-  }
+  const targetSs = resolveTargetEventSpreadsheet(ui, 'Setup / Sync Lodging & Room Inventory Tabs');
+  if (!targetSs) return;
 
   const result = syncLodgingAndRoomsForSheet(targetSs);
   if (result.success) {
@@ -5607,6 +5892,36 @@ function syncLodgingAndRoomsByFormId(formId) {
   }
   const targetSs = SpreadsheetApp.openByUrl(sheetUrl);
   return syncLodgingAndRoomsForSheet(targetSs);
+}
+
+/**
+ * Sidebar handler to rebuild Summary Dashboard for a monitored event by formId.
+ */
+function rebuildSummaryDashboardByFormId(formId) {
+  if (!formId) throw new Error("No event selected.");
+  const props = PropertiesService.getScriptProperties();
+  const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const cfg = formsToMonitor[formId];
+  let sheetUrl = cfg && cfg.sheetUrl ? cfg.sheetUrl : "";
+  let targetSs;
+  if (sheetUrl) {
+    targetSs = openSpreadsheetFromUrlOrId(sheetUrl);
+  } else {
+    const form = FormApp.openById(formId);
+    const destId = form.getDestinationId();
+    if (!destId) throw new Error("No linked response spreadsheet found for this event.");
+    targetSs = SpreadsheetApp.openById(destId);
+  }
+
+  const responsesSheet = targetSs.getSheetByName("Form Responses 1");
+  if (!responsesSheet) {
+    throw new Error(`Could not find "Form Responses 1" tab in "${targetSs.getName()}".`);
+  }
+
+  const respData = responsesSheet.getDataRange().getDisplayValues();
+  const selectedNames = respData.length > 0 ? respData[0].map(h => String(h).trim()).filter(Boolean) : [];
+  setupSummaryDashboard(targetSs, selectedNames);
+  return { success: true, message: `Successfully rebuilt the "Summary Dashboard" tab for "${targetSs.getName()}"!` };
 }
 
 /**
@@ -5793,21 +6108,8 @@ function syncLodgingAndRoomsForSheet(targetSs) {
  */
 function syncCheckInAndChangeLogMenu() {
   const ui = SpreadsheetApp.getUi();
-  const prompt = ui.prompt(
-    'Setup / Sync Printable Check-In & Change Log Tabs',
-    'Enter the Google Sheet URL of the event response spreadsheet (or leave blank if running inside the event sheet):',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (prompt.getSelectedButton() !== ui.Button.OK) return;
-  const url = prompt.getResponseText().trim();
-
-  let targetSs;
-  try {
-    targetSs = url ? SpreadsheetApp.openByUrl(url) : SpreadsheetApp.getActiveSpreadsheet();
-  } catch (err) {
-    ui.alert('Error', 'Could not open spreadsheet. Please check the URL and permissions: ' + err.message, ui.ButtonSet.OK);
-    return;
-  }
+  const targetSs = resolveTargetEventSpreadsheet(ui, 'Setup / Sync Printable Check-In & Change Log Tabs');
+  if (!targetSs) return;
 
   const result = syncCheckInAndChangeLogForSheet(targetSs);
   if (result.success) {
@@ -5950,18 +6252,12 @@ function syncCheckInAndChangeLogForSheet(targetSs) {
  */
 function importHostChurchRoomsMenu() {
   const ui = SpreadsheetApp.getUi();
-  const targetPrompt = ui.prompt(
-    'Import Host Church Rooms (Step 1 of 2)',
-    'Enter the Google Sheet URL of the Event Response Spreadsheet:',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (targetPrompt.getSelectedButton() !== ui.Button.OK) return;
-  const targetUrl = targetPrompt.getResponseText().trim();
-  if (!targetUrl) return;
+  const targetSs = resolveTargetEventSpreadsheet(ui, 'Import Host Church Rooms (Step 1: Event Sheet)');
+  if (!targetSs) return;
 
   const sourcePrompt = ui.prompt(
-    'Import Host Church Rooms (Step 2 of 2)',
-    'Enter the Google Sheet URL of the Host Church Room List (or paste the same Event Sheet URL if they copied their room tab into the workbook):\n\nOptional: To specify a tab name, append #TabName at the end.',
+    'Import Host Church Rooms (Step 2: Host Room Sheet)',
+    `Target Event Sheet: "${targetSs.getName()}"\n\nEnter the Google Sheet URL of the Host Church Room List (or paste the same Event Sheet URL if they copied their room tab into the workbook):\n\nOptional: To specify a tab name, append #TabName at the end.`,
     ui.ButtonSet.OK_CANCEL
   );
   if (sourcePrompt.getSelectedButton() !== ui.Button.OK) return;
@@ -5977,7 +6273,6 @@ function importHostChurchRoomsMenu() {
   }
 
   try {
-    const targetSs = SpreadsheetApp.openByUrl(targetUrl);
     const result = importHostChurchRoomsToSheet(targetSs, sourceUrl, tabName);
     if (result.success) {
       ui.alert('Success', result.message, ui.ButtonSet.OK);
@@ -6166,22 +6461,8 @@ function importHostChurchRoomsToSheet(targetSs, sourceUrl, optionalTabName) {
  */
 function syncLogisticsStayingAtChurchMenu() {
   const ui = SpreadsheetApp.getUi();
-  const prompt = ui.prompt(
-    'Sync Logistics "Staying at Church" Column',
-    'Enter the Google Sheet URL of the event response spreadsheet to update:',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (prompt.getSelectedButton() !== ui.Button.OK) return;
-  const url = prompt.getResponseText().trim();
-  if (!url) return;
-  
-  let targetSs;
-  try {
-    targetSs = SpreadsheetApp.openByUrl(url);
-  } catch (err) {
-    ui.alert('Error', 'Could not open spreadsheet. Please check the URL and permissions: ' + err.message, ui.ButtonSet.OK);
-    return;
-  }
+  const targetSs = resolveTargetEventSpreadsheet(ui, 'Sync Logistics "Staying at Church" Column');
+  if (!targetSs) return;
   
   const result = syncLogisticsStayingAtChurchColumn(targetSs);
   if (result.success) {
@@ -6493,25 +6774,12 @@ function configureDelegatedWebApp() {
  */
 function rebuildSummaryDashboardMenu() {
   const ui = SpreadsheetApp.getUi();
-  const resp = ui.prompt(
-    'Rebuild Summary Dashboard',
-    'Enter or paste the URL of the Event Responses Spreadsheet (or leave blank if running directly inside the event spreadsheet):',
-    ui.ButtonSet.OK_CANCEL
-  );
-  if (resp.getSelectedButton() !== ui.Button.OK) return;
-
-  const url = resp.getResponseText().trim();
-  let targetSs;
-  try {
-    targetSs = url ? SpreadsheetApp.openByUrl(url) : SpreadsheetApp.getActiveSpreadsheet();
-  } catch(e) {
-    ui.alert('Error', 'Could not open the spreadsheet: ' + e.message, ui.ButtonSet.OK);
-    return;
-  }
+  const targetSs = resolveTargetEventSpreadsheet(ui, 'Rebuild Summary Dashboard for Event Sheet');
+  if (!targetSs) return;
 
   const responsesSheet = targetSs.getSheetByName("Form Responses 1");
   if (!responsesSheet) {
-    ui.alert('Error', 'Could not find "Form Responses 1" tab in this spreadsheet.', ui.ButtonSet.OK);
+    ui.alert('Error', `Could not find "Form Responses 1" tab in "${targetSs.getName()}".`, ui.ButtonSet.OK);
     return;
   }
 

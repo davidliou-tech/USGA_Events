@@ -1492,6 +1492,10 @@ function backgroundTransportationSync() {
  * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null}
  */
 function resolveTargetEventSpreadsheetForMenu(ui, menuTitle) {
+  if (typeof resolveTargetEventSpreadsheet === "function") {
+    return resolveTargetEventSpreadsheet(ui, menuTitle);
+  }
+
   const activeSs = SpreadsheetApp.getActiveSpreadsheet();
   if (activeSs && (activeSs.getSheetByName("Pickup") || activeSs.getSheetByName("Drop-Off") || activeSs.getSheetByName("Form Responses 1"))) {
     return activeSs;

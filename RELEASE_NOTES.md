@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.9.9 (Current) - Printable Check-In Sheet, Registration Change Log & Automatic Room Release](#version-299)
+- [Version 2.10.0 (Current) - System Log Linked Event Resolver & Zero-Copy Maintenance Workflows](#version-2100)
+- [Version 2.9.9 - Printable Check-In Sheet, Registration Change Log & Automatic Room Release](#version-299)
 - [Version 2.9.8 - Summary Dashboard Resilience, Dynamic Ingestion & Multilingual Formula Hardening](#version-298)
 - [Version 2.9.7 - Confirmation Email Title Deduplication Fix](#version-297)
 - [Version 2.9.6 - Runtime Blocker Fixes, Operational Integrity & Performance Optimization](#version-296)
@@ -24,6 +25,54 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-2100"></a>
+## Version 2.10.0
+*October 2026*
+
+### System Log Linked Event Resolver & Zero-Copy Maintenance Workflows
+- **Centralized Hybrid Event Resolver (`resolveTargetEventSpreadsheet`)**:
+  - Replaces tedious manual copying and pasting of spreadsheet URLs across all menu maintenance tools and transportation scripts with an intelligent, multi-tier resolver.
+  - **Context-Aware Active Row Detection**:
+    - When viewing the **`System Log`** tab (e.g. reviewing active events on rows 2–6), the script automatically inspects the currently highlighted cell/row (`selectedRow >= 2`).
+    - Detects the event's title, template, coordinator, and `Response Sheet URL` (Column H) from that row and displays a fast confirmation prompt:
+      > *Target Event Detected (System Log Row 4):*  
+      > *• Event: West Region Winter 2026 College Youth Spiritual Convocation (CYSC)*  
+      > *• Template: College Youth Spiritual Convocation (CYSC)*  
+      > *• Coordinator: west.cysc@tjc.org*  
+      > *Proceed with "[Action Name]" on this event's response sheet?*  
+      > **[YES]** &nbsp;&nbsp; **[NO]** &nbsp;&nbsp; **[CANCEL]**
+    - Clicking **YES** immediately opens and executes the script on that spreadsheet (1-click action, zero copying).
+  - **Smart Chip & Rich Link Extraction (`extractSheetUrlFromCell`)**:
+    - Robustly resolves spreadsheet URLs from modern Google Drive/Sheets smart chips, rich text hyperlinks (`rt.getLinkUrl()` and runs), `=HYPERLINK("...", "...")` formulas, and raw URL strings in Column H.
+  - **Smart Event Picker Fallback (`getEventsFromSystemLog`)**:
+    - If invoked while on another tab (e.g., *Templates*, *Field Dictionary*), on the header row (row 1), or if the user clicks **NO** on the active row prompt, the system dynamically parses the **`System Log`** and presents a clean, numbered list of active events:
+      > *Choose an event by entering its number (1–5), or paste any Google Sheet URL:*  
+      > *1. [Row 2] 2026 USGA Ministers Workshop [2026]*  
+      > *2. [Row 3] 51st National Church Conference (NCC) [2026]*  
+      > *3. [Row 4] West Region Winter 2026 CYSC [2026]*  
+      > *...*  
+      > *Enter number (1–5) or paste URL:*
+    - Simply typing a number (e.g. `3`) executes on that event; pasting an external sheet URL or standalone Sheet ID remains fully supported for backward compatibility.
+  - **Direct Response Sheet Execution**:
+    - When running directly inside an event response workbook (e.g., containing `Form Responses 1`), detects this immediately and runs locally without prompting.
+- **Upgraded Maintenance Menu Scripts in `Code.gs`**:
+  - `upgradeExistingSheet` (*Upgrade Existing Sheet (Full Sync)*)
+  - `rebuildSummaryDashboardMenu` (*Rebuild Summary Dashboard for Event Sheet*)
+  - `syncLodgingAndRoomsMenu` (*Setup / Sync Lodging & Room Inventory Tabs*)
+  - `syncCheckInAndChangeLogMenu` (*Setup / Sync Printable Check-In & Change Log Tabs*)
+  - `importHostChurchRoomsMenu` (*Import Host Church Rooms into Event Sheet - Step 1*)
+  - `syncLogisticsStayingAtChurchMenu` (*Sync Logistics "Staying at Church" Column*)
+- **Upgraded Transportation Scripts in `TransportationSync.gs`**:
+  - `resolveTargetEventSpreadsheetForMenu` delegates directly to `resolveTargetEventSpreadsheet`, enabling active row detection and the numbered event picker for:
+    - *Setup / Sync Public Driver Signup Sheet*
+    - *Sync Transportation & Drivers Now*
+    - *Generate Driver Summary Roster*
+- **Sidebar Integration (`ManageEventsSidebar.html` & `rebuildSummaryDashboardByFormId`)**:
+  - Added a **"📊 Rebuild Summary Dashboard"** button under Lodging in the *Manage Active Events* sidebar.
+  - Added `rebuildSummaryDashboardByFormId(formId)` backend handler so coordinators can refresh live summary dashboard formulas with 1 click directly from the active event manager.
 
 ---
 
