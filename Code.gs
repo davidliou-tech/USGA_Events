@@ -87,6 +87,7 @@ function syncActiveEventsFromSystemLog() {
   const archivedIds = JSON.parse(props.getProperty('ArchivedFormIds') || '[]');
   
   let syncedCount = 0;
+  const urlMap = (respSsUrlIdx !== -1) ? fetchSmartChipUrlsFromSheetsApi(ss, "System Log", 2, data.length, respSsUrlIdx + 1) : {};
   
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
@@ -98,7 +99,19 @@ function syncActiveEventsFromSystemLog() {
 
     const eventTitle = (titleIdx !== -1 && row[titleIdx]) ? String(row[titleIdx]).trim() : ((templateIdx !== -1 && row[templateIdx]) ? String(row[templateIdx]).trim() : "Event " + i);
     const formUrl = formUrlIdx !== -1 ? String(row[formUrlIdx]).trim() : "";
-    const respSsUrl = respSsUrlIdx !== -1 ? String(row[respSsUrlIdx]).trim() : "";
+    const rawRespSsVal = respSsUrlIdx !== -1 ? String(row[respSsUrlIdx]).trim() : "";
+    let respSsUrl = urlMap[i + 1] || "";
+    if (!respSsUrl) {
+      respSsUrl = resolveUrlFromRowData(logSheet, i + 1, {
+        headers: headers,
+        rowVals: row,
+        urlMap: urlMap
+      });
+    }
+    if (!respSsUrl && rawRespSsVal) {
+      respSsUrl = rawRespSsVal;
+    }
+
     const folderUrl = folderUrlIdx !== -1 ? String(row[folderUrlIdx]).trim() : "";
     const sendAs = sendAsIdx !== -1 ? String(row[sendAsIdx]).trim() : "us.events@tjc.org";
     
@@ -148,16 +161,25 @@ function syncActiveEventsFromSystemLog() {
       
       // 3. Fallback: Search Drive Folder for Google Forms file
       if (!formId && folderUrl) {
+        let folderId = null;
         const folderMatch = folderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
         if (folderMatch) {
+          folderId = folderMatch[1];
+        } else {
           try {
-            const folder = DriveApp.getFolderById(folderMatch[1]);
+            const folders = DriveApp.getFoldersByName(folderUrl);
+            if (folders.hasNext()) folderId = folders.next().getId();
+          } catch (e) {}
+        }
+        if (folderId) {
+          try {
+            const folder = DriveApp.getFolderById(folderId);
             const files = folder.getFilesByType(MimeType.GOOGLE_FORMS);
             if (files.hasNext()) {
               formId = files.next().getId();
             }
           } catch (e) {
-            Logger.log(`Could not search drive folder ${folderUrl}: ${e.message}`);
+            Logger.log(`Could not search drive folder ${folderId}: ${e.message}`);
           }
         }
       }
@@ -5223,6 +5245,174 @@ function computeDiffRichText(baselineStr, extractedStr) {
 // ==========================================
 
 /**
+ * Returns column letter given 1-based column index (e.g. 1 -> A, 8 -> H).
+ */
+function getColumnLetter(colIndex) {
+  let temp = colIndex;
+  let letter = '';
+  while (temp > 0) {
+    let mod = (temp - 1) % 26;
+    letter = String.fromCharCode(65 + mod) + letter;
+    temp = Math.floor((temp - mod) / 26);
+  }
+  return letter;
+}
+
+/**
+ * Queries the Sheets REST API via UrlFetchApp to extract underlying URIs from Google Drive smart chips.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
+ * @param {string} sheetName
+ * @param {number} startRow
+ * @param {number} endRow
+ * @param {number} col
+ * @returns {Object<number, string>} Map of rowNumber -> URI
+ */
+function fetchSmartChipUrlsFromSheetsApi(ss, sheetName, startRow, endRow, col) {
+  const urlMap = {};
+  if (!ss || startRow > endRow || col < 1) return urlMap;
+
+  try {
+    const ssId = ss.getId();
+    const colLetter = getColumnLetter(col);
+    const rangeA1 = `'${sheetName.replace(/'/g, "''")}'!${colLetter}${startRow}:${colLetter}${endRow}`;
+    const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}?ranges=${encodeURIComponent(rangeA1)}&fields=sheets(data(rowData(values(chipRuns))))`;
+
+    const token = ScriptApp.getOAuthToken();
+    const res = UrlFetchApp.fetch(endpoint, {
+      headers: { Authorization: "Bearer " + token },
+      muteHttpExceptions: true
+    });
+
+    if (res.getResponseCode() === 200) {
+      const data = JSON.parse(res.getContentText());
+      const rowData = data.sheets?.[0]?.data?.[0]?.rowData;
+      if (rowData && Array.isArray(rowData)) {
+        for (let i = 0; i < rowData.length; i++) {
+          const rowNum = startRow + i;
+          const cellVals = rowData[i]?.values?.[0];
+          if (cellVals && cellVals.chipRuns && Array.isArray(cellVals.chipRuns)) {
+            for (const run of cellVals.chipRuns) {
+              const uri = run.chip?.richLinkProperties?.uri;
+              if (uri && uri.startsWith("http")) {
+                urlMap[rowNum] = uri;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      Logger.log("fetchSmartChipUrlsFromSheetsApi non-200 code: " + res.getResponseCode());
+    }
+  } catch (e) {
+    Logger.log("fetchSmartChipUrlsFromSheetsApi exception: " + e.message);
+  }
+  return urlMap;
+}
+
+/**
+ * Robustly resolves the target event response spreadsheet URL from a System Log row.
+ * Handles Smart Chips, plain URLs, Drive file name searches, and folder lookups.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} logSheet
+ * @param {number} rowNum
+ * @param {Object} rowContext (headers, rowVals, urlMap)
+ * @returns {string}
+ */
+function resolveUrlFromRowData(logSheet, rowNum, rowContext) {
+  const { headers, rowVals, urlMap } = rowContext;
+
+  // 1. Direct from Sheets API Smart Chip Map
+  if (urlMap && urlMap[rowNum]) {
+    return urlMap[rowNum];
+  }
+
+  const respSsUrlIdx = headers.indexOf("Response Sheet URL");
+  const folderUrlIdx = headers.indexOf("Drive Folder URL");
+  const titleIdx = headers.indexOf("Event Title");
+  const templateIdx = headers.indexOf("Template Name");
+
+  // 2. RichText link from cell
+  if (respSsUrlIdx !== -1) {
+    try {
+      const cell = logSheet.getRange(rowNum, respSsUrlIdx + 1);
+      const rtUrl = extractSheetUrlFromCell(cell);
+      if (rtUrl && rtUrl.startsWith("http")) {
+        return rtUrl;
+      }
+    } catch (e) {}
+  }
+
+  // 3. String value if raw URL
+  const cellVal = (respSsUrlIdx !== -1 && rowVals[respSsUrlIdx]) ? String(rowVals[respSsUrlIdx]).trim() : "";
+  if (cellVal.startsWith("http://") || cellVal.startsWith("https://") || cellVal.includes("/spreadsheets/d/")) {
+    return cellVal;
+  }
+
+  // 4. If cellVal is a file name (Smart Chip display text), search DriveApp by exact name
+  if (cellVal) {
+    try {
+      const files = DriveApp.getFilesByName(cellVal);
+      while (files.hasNext()) {
+        const f = files.next();
+        if (f.getMimeType() === MimeType.GOOGLE_SHEETS) {
+          return f.getUrl();
+        }
+      }
+      const filesAny = DriveApp.getFilesByName(cellVal);
+      if (filesAny.hasNext()) {
+        return filesAny.next().getUrl();
+      }
+    } catch (e) {
+      Logger.log("Drive file search error: " + e.message);
+    }
+  }
+
+  // 5. Search inside the Drive Folder listed in Column I
+  const folderVal = (folderUrlIdx !== -1 && rowVals[folderUrlIdx]) ? String(rowVals[folderUrlIdx]).trim() : "";
+  if (folderVal) {
+    let folder = null;
+    const folderMatch = folderVal.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    try {
+      if (folderMatch) {
+        folder = DriveApp.getFolderById(folderMatch[1]);
+      } else {
+        const folders = DriveApp.getFoldersByName(folderVal);
+        if (folders.hasNext()) folder = folders.next();
+      }
+      if (folder) {
+        const sheetFiles = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
+        if (sheetFiles.hasNext()) {
+          return sheetFiles.next().getUrl();
+        }
+      }
+    } catch (e) {
+      Logger.log("Drive folder lookup error: " + e.message);
+    }
+  }
+
+  // 6. Match from cached PropertiesService FormsToMonitor
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+    const evTitle = (titleIdx !== -1 && rowVals[titleIdx]) ? String(rowVals[titleIdx]).trim().toLowerCase() : "";
+    const tmplName = (templateIdx !== -1 && rowVals[templateIdx]) ? String(rowVals[templateIdx]).trim().toLowerCase() : "";
+
+    for (const fId in formsToMonitor) {
+      const cfg = formsToMonitor[fId];
+      const cfgTitle = String(cfg.title || "").toLowerCase();
+      if ((evTitle && cfgTitle === evTitle) || (tmplName && cfgTitle.includes(tmplName))) {
+        if (cfg.sheetUrl) return cfg.sheetUrl;
+        if (cfg.sheetId) return `https://docs.google.com/spreadsheets/d/${cfg.sheetId}/edit`;
+      }
+    }
+  } catch (e) {}
+
+  return "";
+}
+
+/**
  * Extracts a valid spreadsheet URL or ID from a spreadsheet cell.
  * Robustly inspects RichText links (Smart Chips & Hyperlinks), formulas, and plain values.
  *
@@ -5231,7 +5421,7 @@ function computeDiffRichText(baselineStr, extractedStr) {
  */
 function extractSheetUrlFromCell(cell) {
   if (!cell) return "";
-  
+
   // 1. Inspect RichTextValue (handles Google Drive Smart Chips & formatted hyperlinks)
   try {
     const rt = cell.getRichTextValue();
@@ -5249,7 +5439,7 @@ function extractSheetUrlFromCell(cell) {
   } catch (e) {
     Logger.log("extractSheetUrlFromCell richText check error: " + e.message);
   }
-  
+
   // 2. Inspect Formula for =HYPERLINK("...", "...")
   try {
     const formula = cell.getFormula();
@@ -5264,7 +5454,7 @@ function extractSheetUrlFromCell(cell) {
   if (val.startsWith("http://") || val.startsWith("https://")) {
     return val;
   }
-  
+
   return "";
 }
 
@@ -5292,27 +5482,33 @@ function openSpreadsheetFromUrlOrId(urlOrId) {
  *
  * @param {GoogleAppsScript.Spreadsheet.Sheet} logSheet
  * @param {number} row
+ * @param {Object<number, string>} [cachedUrlMap]
  * @returns {{row: number, title: string, template: string, year: string, coordinator: string, sheetUrl: string}|null}
  */
-function getEventFromSystemLogRow(logSheet, row) {
+function getEventFromSystemLogRow(logSheet, row, cachedUrlMap) {
   if (!logSheet || row < 2) return null;
   const numCols = logSheet.getLastColumn();
   if (numCols < 1) return null;
-  
+
   const headers = logSheet.getRange(1, 1, 1, numCols).getValues()[0].map(h => String(h || "").trim());
   const rowVals = logSheet.getRange(row, 1, 1, numCols).getValues()[0];
-  
+
   const titleIdx = headers.indexOf("Event Title");
   const templateIdx = headers.indexOf("Template Name");
   const yearIdx = headers.indexOf("Event Year");
   const coordIdx = headers.indexOf("Coordinator");
   const respSsUrlIdx = headers.indexOf("Response Sheet URL");
 
-  let sheetUrl = "";
-  if (respSsUrlIdx !== -1) {
-    const cell = logSheet.getRange(row, respSsUrlIdx + 1);
-    sheetUrl = extractSheetUrlFromCell(cell);
+  let urlMap = cachedUrlMap || null;
+  if (!urlMap && respSsUrlIdx !== -1) {
+    urlMap = fetchSmartChipUrlsFromSheetsApi(logSheet.getParent(), logSheet.getName(), row, row, respSsUrlIdx + 1);
   }
+
+  const sheetUrl = resolveUrlFromRowData(logSheet, row, {
+    headers: headers,
+    rowVals: rowVals,
+    urlMap: urlMap
+  });
 
   const title = (titleIdx !== -1 && rowVals[titleIdx]) ? String(rowVals[titleIdx]).trim() :
                 ((templateIdx !== -1 && rowVals[templateIdx]) ? String(rowVals[templateIdx]).trim() : `Event at Row ${row}`);
@@ -5354,9 +5550,8 @@ function getEventsFromSystemLog() {
 
   if (respSsUrlIdx === -1) return [];
 
+  const urlMap = fetchSmartChipUrlsFromSheetsApi(ss, logSheet.getName(), 2, lastRow, respSsUrlIdx + 1);
   const values = logSheet.getRange(2, 1, numRows, lastCol).getValues();
-  const richTexts = logSheet.getRange(2, respSsUrlIdx + 1, numRows, 1).getRichTextValues();
-  const formulas = logSheet.getRange(2, respSsUrlIdx + 1, numRows, 1).getFormulas();
 
   const events = [];
   for (let i = 0; i < numRows; i++) {
@@ -5367,31 +5562,13 @@ function getEventsFromSystemLog() {
       continue;
     }
 
-    let url = "";
-    if (richTexts && richTexts[i] && richTexts[i][0]) {
-      url = richTexts[i][0].getLinkUrl() || "";
-      if (!url) {
-        const runs = richTexts[i][0].getRuns();
-        if (runs) {
-          for (let r = 0; r < runs.length; r++) {
-            if (runs[r].getLinkUrl()) {
-              url = runs[r].getLinkUrl();
-              break;
-            }
-          }
-        }
-      }
-    }
-    if (!url && formulas && formulas[i] && formulas[i][0]) {
-      const match = formulas[i][0].match(/HYPERLINK\(\s*"([^"]+)"/i);
-      if (match && match[1]) url = match[1];
-    }
-    if (!url && row[respSsUrlIdx]) {
-      const plainVal = String(row[respSsUrlIdx]).trim();
-      if (plainVal.startsWith("http")) url = plainVal;
-    }
+    const sheetUrl = resolveUrlFromRowData(logSheet, rowNum, {
+      headers: headers,
+      rowVals: row,
+      urlMap: urlMap
+    });
 
-    if (!url) continue;
+    if (!sheetUrl) continue;
 
     const title = (titleIdx !== -1 && row[titleIdx]) ? String(row[titleIdx]).trim() :
                   ((templateIdx !== -1 && row[templateIdx]) ? String(row[templateIdx]).trim() : `Event at Row ${rowNum}`);
@@ -5405,7 +5582,7 @@ function getEventsFromSystemLog() {
       template: template,
       year: year,
       coordinator: coordinator,
-      sheetUrl: url.trim()
+      sheetUrl: sheetUrl
     });
   }
 
