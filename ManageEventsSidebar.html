@@ -247,6 +247,16 @@
         });
       };
 
+      function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
       function loadEvents() {
         document.getElementById('loadingEvents').style.display = 'block';
         google.script.run
@@ -406,13 +416,13 @@
           .withSuccessHandler(function(res) {
             syncBtn.innerHTML = originalText;
             status.className = 'success';
-            status.innerHTML = `<strong>Synced:</strong> ${res.message}`;
+            status.innerHTML = `<strong>Synced:</strong> ${escapeHtml(res && res.message ? res.message : res)}`;
             loadEvents();
           })
           .withFailureHandler(function(err) {
             syncBtn.innerHTML = originalText;
             status.className = 'error';
-            status.innerHTML = '<strong>Sync failed:</strong> ' + err.message;
+            status.innerHTML = '<strong>Sync failed:</strong> ' + escapeHtml(err && err.message ? err.message : err);
           })
           .syncActiveEventsFromSystemLog();
       }
@@ -518,7 +528,7 @@
             btn.disabled = false;
             btn.innerText = 'Archive Event';
             status.className = 'error';
-            status.innerHTML = '<strong>Error archiving event:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error archiving event:</strong> ' + escapeHtml(err && err.message ? err.message : err);
           })
           .archiveMonitoredEvent(formId);
       }
@@ -730,7 +740,7 @@
           .withFailureHandler(function(err) {
             btn.disabled = false;
             status.className = 'error';
-            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error:</strong> ' + escapeHtml(err && err.message ? err.message : err);
           })
           .generatePublicTransportationByFormId(formId);
       }
@@ -738,7 +748,7 @@
       function showInlineSuccess(msg) {
         const status = document.getElementById('status');
         status.className = 'success';
-        status.innerHTML = `<strong>Success:</strong> ${msg}`;
+        status.innerHTML = `<strong>Success:</strong> ${escapeHtml(msg)}`;
         status.style.display = 'block';
         setTimeout(() => { status.style.display = 'none'; }, 4000);
       }
@@ -747,7 +757,8 @@
         document.getElementById('loadingEvents').style.display = 'none';
         const status = document.getElementById('status');
         status.className = 'error';
-        status.innerHTML = '<strong>Error loading events:</strong> ' + err.message;
+        const msg = err && err.message ? err.message : String(err);
+        status.innerHTML = '<strong>Error loading events:</strong> ' + escapeHtml(msg);
         status.style.display = 'block';
       }
     </script>

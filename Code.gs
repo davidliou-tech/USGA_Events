@@ -558,7 +558,29 @@ function archiveMonitoredEvent(formId) {
 
 
 function getConfigData() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get("USGA_CONFIG_DATA");
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch (cacheErr) {
+    Logger.log("CacheService read error: " + cacheErr.message);
+  }
+
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    try {
+      const props = PropertiesService.getScriptProperties();
+      const masterId = props.getProperty('MASTER_SPREADSHEET_ID') || "1ZfdmYXN82Mtj3fginstI6aItvvBQNsNoj08s6hCNKF0";
+      ss = SpreadsheetApp.openById(masterId);
+    } catch(e) {
+      Logger.log("getConfigData could not open master spreadsheet: " + e.message);
+    }
+  }
+  if (!ss) {
+    return { dictionary: [], templates: [], airportMapping: {} };
+  }
   
   const dictSheet = ss.getSheetByName('Field Dictionary');
   let dictionary = [];
@@ -619,7 +641,17 @@ function getConfigData() {
     }
   }
 
-  return { dictionary: dictionary, templates: templates, airportMapping: airportMapping };
+  const result = { dictionary: dictionary, templates: templates, airportMapping: airportMapping };
+  try {
+    const serialized = JSON.stringify(result);
+    if (serialized.length < 100000) {
+      cache.put("USGA_CONFIG_DATA", serialized, 3600); // 1 hour TTL
+    }
+  } catch (cacheErr) {
+    Logger.log("CacheService write error: " + cacheErr.message);
+  }
+
+  return result;
 }
 
 // =======================================================================
@@ -2622,10 +2654,12 @@ function generateForm(payload) { try {
 
   let masterSs = SpreadsheetApp.getActiveSpreadsheet();
   if (!masterSs) {
+    const props = PropertiesService.getScriptProperties();
+    const masterSheetId = props.getProperty('MASTER_SPREADSHEET_ID') || "1ZfdmYXN82Mtj3fginstI6aItvvBQNsNoj08s6hCNKF0";
     try {
-      masterSs = SpreadsheetApp.openById("1ZfdmYXN82Mtj3fginstI8altvvBQNzNcj08s8hCNKF0");
+      masterSs = SpreadsheetApp.openById(masterSheetId);
     } catch(e) {
-      Logger.log("Could not open master spreadsheet by ID: " + e.message);
+      Logger.log(`CRITICAL: Unable to open master spreadsheet (${masterSheetId}): ${e.message}`);
     }
   }
   if (masterSs) {
@@ -3105,9 +3139,14 @@ function matchesParticipantRecord(rowFirst, rowLast, rowEmail, targetFirst, targ
 function masterRespondToRegistration(e) {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(30000);
+    const hasLock = lock.tryLock(30000);
+    if (!hasLock) {
+      Logger.log("masterRespondToRegistration: Aborting execution - Lock acquisition timed out after 30s.");
+      return;
+    }
   } catch (lockErr) {
-    Logger.log("masterRespondToRegistration: Could not acquire lock within 30s: " + lockErr.message);
+    Logger.log("masterRespondToRegistration: Could not acquire lock: " + lockErr.message);
+    return;
   }
 
   let editResponseUrl = "";
@@ -3231,8 +3270,8 @@ function masterRespondToRegistration(e) {
               }) + 1;
 
               if (row > 2) {
-                const priorStatuses = statusColIdx > 0 
-                  ? sheet.getRange(2, statusColIdx, row - 2, 1).getValues() 
+                const priorStatuses = statusColIndex > 0 
+                  ? sheet.getRange(2, statusColIndex, row - 2, 1).getValues() 
                   : [];
                 const priorConsents = medColIdx > 0
                   ? sheet.getRange(2, medColIdx, row - 2, 1).getValues()
@@ -3543,7 +3582,7 @@ function masterRespondToRegistration(e) {
         if (foundRowIndex !== -1) {
           dropoffSheet.getRange(foundRowIndex, 1, 1, updateData.length).setValues([updateData]);
           const isCancelled = data[foundRowIndex - 1][statusIdx] === "CANCELLED";
-          const isUpdated = String(flightStatus).startsWith("Updated");
+          const isUpdated = String(flightStatus).toUpperCase().startsWith("UPDATED");
           const isWait = flightStatus === "WAITLISTED";
           dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
                      .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
@@ -3991,7 +4030,8 @@ function masterRespondToRegistration(e) {
     let logoBlob = null;
     let logoHtml = "";
     try {
-      logoBlob = DriveApp.getFileById("1KltAMA0tXmJeeam2pg_omUjMvD5_un-d").getBlob();
+      const logoId = PropertiesService.getScriptProperties().getProperty('ORGANIZATION_LOGO_ID') || "1KltAMA0tXmJeeam2pg_omUjMvD5_un-d";
+      logoBlob = DriveApp.getFileById(logoId).getBlob();
       logoHtml = `<img src="cid:usgaLogo" alt="${settings.OrgName} Logo" style="max-width: 150px; height: auto; margin-bottom: 20px;">`;
     } catch (err) {
       Logger.log("Could not load logo: " + err.message);
@@ -4019,46 +4059,65 @@ function masterRespondToRegistration(e) {
     if (isRejected) bodyContent = rejectionContent;
     else if (isWaitlisted) bodyContent = waitlistContent;
 
-    let form;
-    try {
-      const formUrl = responseSs.getFormUrl();
-      form = FormApp.openByUrl(formUrl);
-      
-      const formResponses = form.getResponses();
-      for (let i = formResponses.length - 1; i >= 0; i--) {
-        const formResponse = formResponses[i];
-        const formEmail = formResponse.getRespondentEmail() || "";
-        let typedEmail = "";
-        let respFirstName = "";
-        let respLastName = "";
-        
-        const itemResponses = formResponse.getItemResponses();
-        for (let j = 0; j < itemResponses.length; j++) {
-          const itemTitle = itemResponses[j].getItem().getTitle().toLowerCase();
-          const respVal = String(itemResponses[j].getResponse() || "").trim();
-          if (itemTitle.includes("email") && !itemTitle.includes("minor")) {
-            typedEmail = respVal;
-          }
-          if (itemTitle.includes("first name")) {
-            respFirstName = respVal;
-          }
-          if (itemTitle.includes("last name")) {
-            respLastName = respVal;
-          }
-        }
-        
-        const emailMatches = (formEmail && formEmail.toLowerCase() === emailRecipient.toLowerCase()) || 
-                             (typedEmail && typedEmail.toLowerCase() === emailRecipient.toLowerCase());
-        const nameMatches = (!respFirstName || !firstName || respFirstName.toLowerCase() === firstName.toLowerCase()) &&
-                            (!respLastName || !lastName || respLastName.toLowerCase() === lastName.toLowerCase());
-
-        if (emailMatches && nameMatches) {
-          editResponseUrl = formResponse.getEditResponseUrl();
-          break; 
-        }
+    // Fast-path: Check trigger event object directly
+    if (e && e.response && typeof e.response.getEditResponseUrl === 'function') {
+      try {
+        editResponseUrl = e.response.getEditResponseUrl();
+      } catch (evtErr) {
+        Logger.log("Could not read editResponseUrl directly from event object: " + evtErr.message);
       }
-    } catch (e) {
-      Logger.log("Could not open form or fetch edit URL: " + e);
+    }
+
+    if (!editResponseUrl) {
+      let form;
+      try {
+        const formUrl = responseSs.getFormUrl();
+        form = FormApp.openByUrl(formUrl);
+        
+        // Pre-index item titles once to eliminate N*M RPC calls
+        const itemTitleMap = new Map();
+        form.getItems().forEach(it => {
+          itemTitleMap.set(it.getId(), it.getTitle().toLowerCase());
+        });
+
+        const formResponses = form.getResponses();
+        const searchLimit = Math.max(0, formResponses.length - 15);
+        for (let i = formResponses.length - 1; i >= searchLimit; i--) {
+          const formResponse = formResponses[i];
+          const formEmail = formResponse.getRespondentEmail() || "";
+          let typedEmail = "";
+          let respFirstName = "";
+          let respLastName = "";
+          
+          const itemResponses = formResponse.getItemResponses();
+          for (let j = 0; j < itemResponses.length; j++) {
+            const it = itemResponses[j].getItem();
+            const itemTitle = itemTitleMap.get(it.getId()) || it.getTitle().toLowerCase();
+            const respVal = String(itemResponses[j].getResponse() || "").trim();
+            if (itemTitle.includes("email") && !itemTitle.includes("minor")) {
+              typedEmail = respVal;
+            }
+            if (itemTitle.includes("first name")) {
+              respFirstName = respVal;
+            }
+            if (itemTitle.includes("last name")) {
+              respLastName = respVal;
+            }
+          }
+          
+          const emailMatches = (formEmail && formEmail.toLowerCase() === emailRecipient.toLowerCase()) || 
+                               (typedEmail && typedEmail.toLowerCase() === emailRecipient.toLowerCase());
+          const nameMatches = (!respFirstName || !firstName || respFirstName.toLowerCase() === firstName.toLowerCase()) &&
+                              (!respLastName || !lastName || respLastName.toLowerCase() === lastName.toLowerCase());
+
+          if (emailMatches && nameMatches) {
+            editResponseUrl = formResponse.getEditResponseUrl();
+            break; 
+          }
+        }
+      } catch (e) {
+        Logger.log("Could not open form or fetch edit URL: " + e);
+      }
     }
     
     let editButtonHtml = "";
@@ -4159,6 +4218,16 @@ function masterRespondToRegistration(e) {
 
     let statusText = "";
     const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm:ss");
+
+    const remainingQuota = MailApp.getRemainingDailyQuota();
+    if (remainingQuota < 1) {
+      Logger.log("WARNING: Daily email quota reached (0 remaining). Confirmation email deferred.");
+      statusText = `Quota Exceeded - Pending Dispatch (${timestamp})`;
+      if (sheet && row > 0 && statusColIndex > 0) {
+        sheet.getRange(row, statusColIndex).setValue(statusText);
+      }
+      return;
+    }
     
     try {
       let gmailOptions = {
@@ -4236,7 +4305,8 @@ function testEmailVersions() {
   let logoBlob = null;
   let logoHtml = "";
   try {
-    logoBlob = DriveApp.getFileById("1KltAMA0tXmJeeam2pg_omUjMvD5_un-d").getBlob();
+    const logoId = PropertiesService.getScriptProperties().getProperty('ORGANIZATION_LOGO_ID') || "1KltAMA0tXmJeeam2pg_omUjMvD5_un-d";
+    logoBlob = DriveApp.getFileById(logoId).getBlob();
     logoHtml = `<img src="cid:usgaLogo" alt="${settings.OrgName} Logo" style="max-width: 150px; height: auto; margin-bottom: 20px;">`;
   } catch (e) {
     Logger.log("Could not load logo: " + e.message);
@@ -5094,9 +5164,15 @@ function masterFormLifecycleCron() {
           }
         }
       } catch (e) {
-        // Form was deleted or inaccessible, stop monitoring
-        delete formsToMonitor[formId];
-        changed = true;
+        const errMsg = String(e.message || e).toLowerCase();
+        // Only delete from monitoring if Google explicitly confirms the form no longer exists
+        if (errMsg.includes("not found") || errMsg.includes("invalid item id") || errMsg.includes("no item with the given id")) {
+          Logger.log(`Form ${formId} permanently deleted or invalid. Removing from monitoring.`);
+          delete formsToMonitor[formId];
+          changed = true;
+        } else {
+          Logger.log(`Transient error contacting Form ${formId} (${e.message}). Retaining in monitoring.`);
+        }
       }
     }
     
@@ -6875,6 +6951,24 @@ function syncLogisticsStayingAtChurchColumn(targetSs) {
  * delegation to event coordinators without granting them Content Manager rights
  * over the entire Shared Drive.
  */
+/**
+ * Web App GET endpoint. Provides health check and diagnostic status.
+ */
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    service: "USGA Event Registration Delegated Execution API",
+    status: "online",
+    timestamp: new Date().toISOString()
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Web App HTTP POST endpoint.
+ * When deployed as "Execute as: Me", this runs under the Master Admin identity,
+ * allowing subfolder creation in the Shared Drive root and automatic permission
+ * delegation to event coordinators without granting them Content Manager rights
+ * over the entire Shared Drive.
+ */
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -6882,27 +6976,38 @@ function doPost(e) {
     }
     const payload = JSON.parse(e.postData.contents);
 
-    // Web App Security Check [V2.9.2]: Verify caller authorization
+    // Web App Security Check: Verify caller authorization
     const props = PropertiesService.getScriptProperties();
     const sharedSecret = props.getProperty('WEB_APP_SECRET_TOKEN');
-    const allowedDomain = props.getProperty('ALLOWED_EMAIL_DOMAIN') || '@tjc.org';
-    
-    if (sharedSecret) {
-      const incomingSecret = (e.parameter && e.parameter.token) || payload.secretToken;
-      if (incomingSecret !== sharedSecret) {
-        throw new Error("Unauthorized: Invalid secret token.");
-      }
+    const allowedDomain = (props.getProperty('ALLOWED_EMAIL_DOMAIN') || '@tjc.org').toLowerCase().trim();
+    const domainSuffix = allowedDomain.startsWith('@') ? allowedDomain : ('@' + allowedDomain);
+
+    // 1. Mandatory secret token validation
+    if (!sharedSecret) {
+      Logger.log("WARNING: WEB_APP_SECRET_TOKEN is not configured in Script Properties. Rejecting request.");
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'error',
+        message: 'Web App delegation is unconfigured. WEB_APP_SECRET_TOKEN must be set in Script Properties.'
+      })).setMimeType(ContentService.MimeType.JSON);
     }
-    
-    const coordEmail = String(payload.coordinatorEmail || "").trim().toLowerCase();
+    const incomingSecret = (e.parameter && e.parameter.token) || payload.secretToken;
+    if (!incomingSecret || incomingSecret !== sharedSecret) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'error',
+        message: 'Unauthorized: Missing or invalid secret token.'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 2. Validate coordinator identity
+    const sessionCaller = Session.getActiveUser().getEmail().toLowerCase().trim();
+    const coordEmail = String(payload.coordinatorEmail || sessionCaller || "").trim().toLowerCase();
     if (!coordEmail) {
       throw new Error("Unauthorized: Coordinator email is missing.");
     }
-    
-    const allowedDomainClean = allowedDomain.startsWith('@') ? allowedDomain.toLowerCase() : ('@' + allowedDomain.toLowerCase());
-    if (!coordEmail.endsWith(allowedDomainClean)) {
-      throw new Error(`Unauthorized: Coordinator email (${coordEmail}) must belong to ${allowedDomainClean}`);
+    if (!coordEmail.endsWith(domainSuffix)) {
+      throw new Error(`Unauthorized: Coordinator email (${coordEmail}) must belong to ${domainSuffix}`);
     }
+    payload.coordinatorEmail = coordEmail;
 
     payload.isDelegatedExecution = true;
     const result = generateForm(payload);
@@ -6911,10 +7016,10 @@ function doPost(e) {
       result: result
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
+    Logger.log("doPost Error: " + (err.stack || err.message));
     return ContentService.createTextOutput(JSON.stringify({
       status: 'error',
-      message: err.message,
-      stack: err.stack
+      message: err.message || "An internal error occurred during delegated form generation."
     })).setMimeType(ContentService.MimeType.JSON);
   }
 }

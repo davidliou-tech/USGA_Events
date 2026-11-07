@@ -750,14 +750,25 @@
           return a.localeCompare(b);
         });
 
+        function escapeHtml(str) {
+          if (str === null || str === undefined) return '';
+          return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+
         sortedCats.forEach(cat => {
           const catDiv = document.createElement('div');
           catDiv.className = 'field-category';
           const isReleaseCat = cat === 'Releases & Feedback';
+          const safeCat = escapeHtml(cat);
           
           let headerHtml = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <h3 style="margin: 0; font-size: 13px; color: #202124;">${cat}</h3>
+              <h3 style="margin: 0; font-size: 13px; color: #202124;">${safeCat}</h3>
               ${!isReleaseCat ? `
                 <span style="font-size: 11px;">
                   <a href="javascript:void(0)" onclick="toggleCategory(this, true)" style="color: #1a73e8; text-decoration: none; margin-right: 4px; font-weight: bold;">Select All</a> |
@@ -776,10 +787,12 @@
             const isRelease = field.category === 'Releases & Feedback';
             const shouldCheck = isRelease || checkedFieldNames.includes(field.name);
             const disabled = isRelease ? 'disabled' : ''; // Lock releases
+            const safeName = escapeHtml(field.name);
+            const safeType = escapeHtml(field.type);
 
             itemDiv.innerHTML = `
-              <input type="checkbox" class="field-checkbox" value="${field.name.replace(/"/g, '&quot;')}" ${shouldCheck ? 'checked' : ''} ${disabled}>
-              <label style="font-weight:normal;">${field.name} <span class="field-type-badge">(${field.type})</span></label>
+              <input type="checkbox" class="field-checkbox" value="${safeName}" ${shouldCheck ? 'checked' : ''} ${disabled}>
+              <label style="font-weight:normal;">${safeName} <span class="field-type-badge">(${safeType})</span></label>
             `;
             catDiv.appendChild(itemDiv);
           });
@@ -933,7 +946,8 @@
       function onError(error) {
         const status = document.getElementById('status');
         status.className = 'error';
-        status.innerHTML = `<strong>Error:</strong> ${error.message}`;
+        const msg = error && error.message ? error.message : String(error);
+        status.innerHTML = `<strong>Error:</strong> ${escapeHtml(msg)}`;
         document.getElementById('generateBtn').disabled = false;
       }
     </script>

@@ -732,6 +732,7 @@ function pullDriversFromPublic(publicSs, masterSs) {
 
     if (subIdIdx === -1) return;
 
+    let tabModified = false;
     for (let r = 1; r < mData.length; r++) {
       const rowSubId = String(mData[r][subIdIdx] || "").trim();
       if (!rowSubId || !claimsMap.has(rowSubId)) continue;
@@ -741,23 +742,28 @@ function pullDriversFromPublic(publicSs, masterSs) {
 
       // Update if driver info differs or is new
       if (currentDriver !== claim.driverName) {
-        if (dNameIdx !== -1) mSheet.getRange(r + 1, dNameIdx + 1).setValue(claim.driverName);
-        if (dPhoneIdx !== -1) mSheet.getRange(r + 1, dPhoneIdx + 1).setValue(claim.driverPhone);
+        if (dNameIdx !== -1) mData[r][dNameIdx] = claim.driverName;
+        if (dPhoneIdx !== -1) mData[r][dPhoneIdx] = claim.driverPhone;
         if (dNotesIdx !== -1) {
           const notesCombined = (claim.driverVehicle ? `[${claim.driverVehicle}] ` : "") + claim.driverNotes;
-          mSheet.getRange(r + 1, dNotesIdx + 1).setValue(notesCombined.trim());
+          mData[r][dNotesIdx] = notesCombined.trim();
         }
         if (statusIdx !== -1) {
           const curStatus = String(mData[r][statusIdx] || "").trim();
           if (!curStatus || curStatus === "Unassigned") {
-            mSheet.getRange(r + 1, statusIdx + 1).setValue("Driver Claimed");
+            mData[r][statusIdx] = "Driver Claimed";
           }
         }
 
+        tabModified = true;
         if (tab.isPickup) report.pickupUpdated++;
         else report.dropoffUpdated++;
         report.newClaims.push(`${claim.driverName} -> ${rowSubId}`);
       }
+    }
+
+    if (tabModified) {
+      mSheet.getRange(1, 1, mData.length, mData[0].length).setValues(mData);
     }
   });
 
@@ -871,12 +877,13 @@ function pushTransportationToPublic(masterSs, publicSs, options) {
       pubSheet.getRange(3, 9, publicRows.length, 1).setNumberFormat("@");
       pubSheet.getRange(3, 1, publicRows.length, 1).setNumberFormat("@");
 
-      // Apply row styling based on status
-      for (let r = 0; r < publicRows.length; r++) {
-        const isClaimed = publicRows[r][11] === "🟡 CLAIMED";
-        const rowRange = pubSheet.getRange(r + 3, 1, 1, 12);
-        rowRange.setBackground(isClaimed ? "#fce8e6" : "#ffffff"); // Soft tint if claimed
-      }
+      // Apply row styling based on status in a single batch call
+      const bgMatrix = publicRows.map(row => {
+        const isClaimed = row[11] === "🟡 CLAIMED";
+        const color = isClaimed ? "#fce8e6" : "#ffffff";
+        return new Array(12).fill(color);
+      });
+      pubSheet.getRange(3, 1, publicRows.length, 12).setBackgrounds(bgMatrix);
     }
 
     if (tab.travelType === "PICKUP") report.pickupSlots = slots.length;
@@ -884,25 +891,33 @@ function pushTransportationToPublic(masterSs, publicSs, options) {
 
     // Step E: Update Master sheet columns 18–22 (Sub-ID, Slot, Dispatch SMS)
     ensureTransportationHeaders(mSheet, tab.travelType);
-    const mHeaders = mSheet.getRange(1, 1, 1, mSheet.getLastColumn()).getValues()[0];
-    const subIdCol = mHeaders.indexOf("Trip Sub-ID") + 1;
-    const slotCol = mHeaders.indexOf("Vehicle Slot") + 1;
-    const smsCol = mHeaders.indexOf("One-Click Dispatch SMS Text") + 1;
+    const mDataFull = mSheet.getDataRange().getValues();
+    if (mDataFull.length > 1) {
+      const mHeaders = mDataFull[0].map(h => String(h || "").trim());
+      const subIdIdx = mHeaders.indexOf("Trip Sub-ID");
+      const slotIdx = mHeaders.indexOf("Vehicle Slot");
+      const smsIdx = mHeaders.indexOf("One-Click Dispatch SMS Text");
 
-    slots.forEach(slot => {
-      const smsText = buildDispatchSmsText(
-        slot,
-        slot.passengers,
-        config.coordinatorPhone,
-        config.eventName
-      );
+      slots.forEach(slot => {
+        const smsText = buildDispatchSmsText(
+          slot,
+          slot.passengers,
+          config.coordinatorPhone,
+          config.eventName
+        );
 
-      slot.passengers.forEach(p => {
-        if (subIdCol > 0) mSheet.getRange(p.rowIndex, subIdCol).setValue(slot.tripSubId);
-        if (slotCol > 0) mSheet.getRange(p.rowIndex, slotCol).setValue(slot.slotLabel);
-        if (smsCol > 0) mSheet.getRange(p.rowIndex, smsCol).setValue(smsText);
+        slot.passengers.forEach(p => {
+          const rIdx = p.rowIndex - 1;
+          if (rIdx >= 0 && rIdx < mDataFull.length) {
+            if (subIdIdx !== -1) mDataFull[rIdx][subIdIdx] = slot.tripSubId;
+            if (slotIdx !== -1) mDataFull[rIdx][slotIdx] = slot.slotLabel;
+            if (smsIdx !== -1) mDataFull[rIdx][smsIdx] = smsText;
+          }
+        });
       });
-    });
+
+      mSheet.getRange(1, 1, mDataFull.length, mDataFull[0].length).setValues(mDataFull);
+    }
 
     // Reapply protected ranges to Public sheet (skip in lightweight mode to avoid remote API latency on form submission)
     if (!options.isLightweight && !options.skipProtections) {
@@ -1441,9 +1456,11 @@ function backgroundTransportationSync() {
     const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
     for (const formId in formsToMonitor) {
       const cfg = formsToMonitor[formId];
-      if (!cfg || !cfg.sheetUrl) continue;
+      if (!cfg || (!cfg.sheetId && !cfg.sheetUrl)) continue;
       try {
-        const targetSs = SpreadsheetApp.openByUrl(cfg.sheetUrl);
+        const targetSs = cfg.sheetId
+          ? SpreadsheetApp.openById(cfg.sheetId)
+          : SpreadsheetApp.openByUrl(cfg.sheetUrl);
         if (!targetSs || syncedSheetIds.has(targetSs.getId())) continue;
         const tConfig = getTransportationSettings(targetSs);
         if (tConfig.publicTransportSheetId) {
