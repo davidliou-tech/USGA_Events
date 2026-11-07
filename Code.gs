@@ -191,23 +191,34 @@ function syncActiveEventsFromSystemLog() {
     }
 
     if (formId) {
+      // Check live acceptance status of form if new
+      let isFormAccepting = true;
+      let formTitleLive = eventTitle;
+      try {
+        const formObj = FormApp.openById(formId);
+        isFormAccepting = formObj.isAcceptingResponses();
+        if (formObj.getTitle()) formTitleLive = formObj.getTitle();
+      } catch (fErr) {}
+
       if (!formsToMonitor[formId]) {
         formsToMonitor[formId] = {
-          title: eventTitle,
+          title: formTitleLive || eventTitle,
           start: null,
           end: null,
+          eventStart: null,
           isExactEnd: false,
           max: null,
           contactEmail: sendAs || "us.events@tjc.org",
           timeZone: Session.getScriptTimeZone(),
           isZh: false,
-          sheetId: sheetId
+          sheetId: sheetId,
+          isAutoClosed: !isFormAccepting
         };
         syncedCount++;
       } else {
         // Update cached title and sheetId if missing or placeholder
         if (!formsToMonitor[formId].title || formsToMonitor[formId].title.startsWith("Unknown Event") || formsToMonitor[formId].title.startsWith("Event (ID:")) {
-          formsToMonitor[formId].title = eventTitle;
+          formsToMonitor[formId].title = formTitleLive || eventTitle;
         }
         if (!formsToMonitor[formId].sheetId && sheetId) {
           formsToMonitor[formId].sheetId = sheetId;
@@ -277,10 +288,12 @@ function getMonitoredEvents() {
     let editUrl = config.editUrl || (formId ? `https://docs.google.com/forms/d/${formId}/edit` : "");
     let sheetUrl = config.sheetUrl || (sId ? `https://docs.google.com/spreadsheets/d/${sId}/edit` : "");
     
-    // Quick fallback to get title if not cached
-    if (!title || title.startsWith("Unknown Event") || title.startsWith("Event (ID:")) {
-      try {
-        const form = FormApp.openById(formId);
+    // Quick fallback to get title and acceptance status if needed
+    let isAccepting = true;
+    try {
+      const form = FormApp.openById(formId);
+      isAccepting = form.isAcceptingResponses();
+      if (!title || title.startsWith("Unknown Event") || title.startsWith("Event (ID:")) {
         title = String(form.getTitle() || "");
         if (!title) title = String(DriveApp.getFileById(formId).getName() || "");
         publishedUrl = form.getPublishedUrl() || publishedUrl;
@@ -292,6 +305,7 @@ function getMonitoredEvents() {
           title: title,
           start: config.start,
           end: config.end,
+          eventStart: config.eventStart || null,
           isExactEnd: !!config.isExactEnd,
           max: config.max,
           contactEmail: config.contactEmail || "us.events@tjc.org",
@@ -301,9 +315,16 @@ function getMonitoredEvents() {
           pubTransId: config.pubTransId || config.publicTransportSheetId || null
         };
         props.setProperty('FormsToMonitor', JSON.stringify(formsToMonitor));
-      } catch(e) {
-        title = title || "Event (ID: " + formId.substring(0, 8) + "...)";
       }
+    } catch(e) {
+      title = title || "Event (ID: " + formId.substring(0, 8) + "...)";
+    }
+
+    // Exclude events where registration is closed (unless scheduled with a future start date)
+    const now = new Date().getTime();
+    const isFutureScheduled = config.start && now < config.start;
+    if (!isAccepting && !isFutureScheduled) {
+      continue;
     }
     
     results.push({
@@ -365,6 +386,7 @@ function getEventDetails(formId) {
       title: title,
       start: config.start,
       end: config.end,
+      eventStart: config.eventStart || null,
       isExactEnd: !!config.isExactEnd,
       max: config.max,
       contactEmail: config.contactEmail || "us.events@tjc.org",
@@ -407,6 +429,7 @@ function updateMonitoredEvent(formId, updatedConfig) {
       title: updatedConfig.title !== undefined ? updatedConfig.title : (existing.title || ""),
       start: updatedConfig.start !== undefined ? updatedConfig.start : existing.start,
       end: updatedConfig.end !== undefined ? updatedConfig.end : existing.end,
+      eventStart: updatedConfig.eventStart !== undefined ? updatedConfig.eventStart : (existing.eventStart || null),
       isExactEnd: updatedConfig.isExactEnd !== undefined ? !!updatedConfig.isExactEnd : !!existing.isExactEnd,
       max: updatedConfig.max !== undefined ? updatedConfig.max : existing.max,
       contactEmail: updatedConfig.contactEmail !== undefined ? updatedConfig.contactEmail : (existing.contactEmail || "us.events@tjc.org"),
@@ -2570,10 +2593,12 @@ function generateForm(payload) { try {
     // Save Registration Lifecycle config (always register event in FormsToMonitor)
     const props = PropertiesService.getScriptProperties();
     let monitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+    const parsedEventStart = payload.eventDetails.startDate ? parseLocalDate(payload.eventDetails.startDate) : null;
     monitor[form.getId()] = {
       title: formTitle,
       start: payload.eventDetails.regStartTimestamp || (payload.eventDetails.regStartDate ? parseLocalDate(payload.eventDetails.regStartDate).getTime() : null),
       end: payload.eventDetails.regEndTimestamp || (payload.eventDetails.regEndDate ? parseLocalDate(payload.eventDetails.regEndDate).getTime() : null),
+      eventStart: parsedEventStart ? parsedEventStart.getTime() : null,
       isExactEnd: payload.eventDetails.regEndDate ? payload.eventDetails.regEndDate.includes('T') : false,
       max: payload.eventDetails.maxAttendees ? parseInt(payload.eventDetails.maxAttendees, 10) : null,
       contactEmail: payload.eventDetails.contactEmail || "us.events@tjc.org",
@@ -2612,6 +2637,10 @@ function generateForm(payload) { try {
       }
       const endThreshold1 = monitor[form.getId()].isExactEnd ? monitor[form.getId()].end : (monitor[form.getId()].end + 24*60*60*1000);
       if (monitor[form.getId()].end && now > endThreshold1) {
+        shouldAccept = false;
+      }
+      // Auto-close if event itself has already started
+      if (monitor[form.getId()].eventStart && now >= monitor[form.getId()].eventStart) {
         shouldAccept = false;
       }
       
@@ -5072,6 +5101,11 @@ function masterFormLifecycleCron() {
         // If today is strictly AFTER the end date (we add 24 hours for legacy date-only forms, but use exact time if provided)
         const endThreshold = config.isExactEnd ? config.end : (config.end + 24*60*60*1000);
         if (config.end && now > endThreshold) {
+          shouldAccept = false;
+        }
+
+        // Automatic closure when the event itself begins
+        if (config.eventStart && now >= config.eventStart) {
           shouldAccept = false;
         }
         
