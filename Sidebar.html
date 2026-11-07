@@ -380,6 +380,22 @@
          return selected.join(', ');
       }
 
+      function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function sanitizeUrl(url) {
+        if (!url) return '';
+        const clean = String(url).trim();
+        return /^https?:\/\//i.test(clean) ? clean : '#';
+      }
+
       let masterDictionary = [];
       let masterTemplates = [];
       let airportMapping = {};
@@ -395,7 +411,8 @@
         .withFailureHandler(function(err) {
           const status = document.getElementById('status');
           status.className = 'error';
-          status.innerHTML = '<strong>Error loading configuration:</strong> ' + err.message + '<br>Please ensure you have run "Setup Initial Configuration" from the USGA Events menu.';
+          const errMsg = escapeHtml(err && err.message ? err.message : String(err));
+          status.innerHTML = '<strong>Error loading configuration:</strong> ' + errMsg + '<br>Please ensure you have run "Setup Initial Configuration" from the USGA Events menu.';
           status.style.display = 'block';
           document.getElementById('templateSelect').innerHTML = '<option value="">Error loading templates</option>';
         })
@@ -927,17 +944,23 @@
       function onSuccess(response) {
         const status = document.getElementById('status');
         status.className = 'success';
+        const pubUrl = sanitizeUrl(response.publishedUrl);
+        const editUrl = sanitizeUrl(response.editUrl);
+        const sheetUrl = sanitizeUrl(response.sheetUrl);
+        const ptUrl = sanitizeUrl(response.publicTransportUrl);
+        const folderUrl = sanitizeUrl(response.folderUrl);
+
         let linksHtml = `
           <strong>Success!</strong><br>
-          <a href="${response.publishedUrl}" target="_blank">Responder Link (Live Form)</a><br>
-          <a href="${response.editUrl}" target="_blank">Edit Form</a><br>
-          <a href="${response.sheetUrl}" target="_blank">View Response Sheet</a>
+          <a href="${pubUrl}" target="_blank">Responder Link (Live Form)</a><br>
+          <a href="${editUrl}" target="_blank">Edit Form</a><br>
+          <a href="${sheetUrl}" target="_blank">View Response Sheet</a>
         `;
-        if (response.publicTransportUrl) {
-          linksHtml += `<br><a href="${response.publicTransportUrl}" target="_blank">🚗 View Public Driver Signup Sheet</a>`;
+        if (ptUrl && ptUrl !== '#') {
+          linksHtml += `<br><a href="${ptUrl}" target="_blank">🚗 View Public Driver Signup Sheet</a>`;
         }
-        if (response.folderUrl) {
-          linksHtml += `<br><a href="${response.folderUrl}" target="_blank">📁 View Event Drive Folder</a>`;
+        if (folderUrl && folderUrl !== '#') {
+          linksHtml += `<br><a href="${folderUrl}" target="_blank">📁 View Event Drive Folder</a>`;
         }
         status.innerHTML = linksHtml;
         document.getElementById('generateBtn').disabled = false;

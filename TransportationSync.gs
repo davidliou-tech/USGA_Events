@@ -300,7 +300,8 @@ function clusterAndChunkTransportation(data, travelType, maxPerCar, windowMinute
   for (let r = 1; r < data.length; r++) {
     const row = data[r];
     const status = statusIdx !== -1 ? String(row[statusIdx] || "").trim() : "Active";
-    if (status.toUpperCase() === "CANCELLED") continue;
+    const statusUpper = status.toUpperCase();
+    if (statusUpper === "CANCELLED" || statusUpper === "WAITLISTED") continue;
 
     const first = firstIdx !== -1 ? String(row[firstIdx] || "").trim() : "";
     const last = lastIdx !== -1 ? String(row[lastIdx] || "").trim() : "";

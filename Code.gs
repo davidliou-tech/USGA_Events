@@ -206,6 +206,7 @@ function syncActiveEventsFromSystemLog() {
       const regOpenVal = (regOpenIdx !== -1 && row[regOpenIdx]) ? (new Date(row[regOpenIdx]).getTime() || null) : null;
       const regCloseVal = (regCloseIdx !== -1 && row[regCloseIdx]) ? (new Date(row[regCloseIdx]).getTime() || null) : null;
       const eventStartVal = (eventStartIdx !== -1 && row[eventStartIdx]) ? (new Date(row[eventStartIdx]).getTime() || null) : null;
+      const hasExactTime = !!(regCloseIdx !== -1 && row[regCloseIdx] && String(row[regCloseIdx]).includes(':'));
 
       if (!formsToMonitor[formId]) {
         formsToMonitor[formId] = {
@@ -213,7 +214,7 @@ function syncActiveEventsFromSystemLog() {
           start: regOpenVal,
           end: regCloseVal,
           eventStart: eventStartVal,
-          isExactEnd: false,
+          isExactEnd: hasExactTime,
           max: null,
           contactEmail: sendAs || "us.events@tjc.org",
           timeZone: Session.getScriptTimeZone(),
@@ -231,6 +232,7 @@ function syncActiveEventsFromSystemLog() {
         }
         if (!formsToMonitor[formId].start && regOpenVal) formsToMonitor[formId].start = regOpenVal;
         if (!formsToMonitor[formId].end && regCloseVal) formsToMonitor[formId].end = regCloseVal;
+        if (formsToMonitor[formId].isExactEnd === undefined && regCloseVal) formsToMonitor[formId].isExactEnd = hasExactTime;
         if (!formsToMonitor[formId].eventStart && eventStartVal) formsToMonitor[formId].eventStart = eventStartVal;
       }
     }
@@ -420,6 +422,7 @@ function getEventDetails(formId) {
 }
 
 function updateMonitoredEvent(formId, updatedConfig) {
+  verifyEventCoordinatorOrAdmin(formId);
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
@@ -488,6 +491,7 @@ function updateMonitoredEvent(formId, updatedConfig) {
 }
 
 function toggleEventAcceptingResponses(formId, shouldAccept) {
+  verifyEventCoordinatorOrAdmin(formId);
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
@@ -517,6 +521,7 @@ function toggleEventAcceptingResponses(formId, shouldAccept) {
 }
 
 function archiveMonitoredEvent(formId) {
+  verifyEventCoordinatorOrAdmin(formId);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -699,31 +704,47 @@ function getConfigData() {
 function isAuthorizedAdmin() {
   const userEmail = Session.getActiveUser().getEmail().toLowerCase().trim();
   if (!userEmail) {
-    try {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const editors = ss.getEditors().map(e => e.getEmail().toLowerCase().trim());
-      const owner = ss.getOwner() ? ss.getOwner().getEmail().toLowerCase().trim() : "";
-      if (editors.includes(userEmail) || owner === userEmail) return true;
-    } catch (e) {}
-    return true;
+    return false;
   }
   const props = PropertiesService.getScriptProperties();
   const adminList = (props.getProperty('ADMIN_EMAILS') || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
-  const allowedDomain = (props.getProperty('ALLOWED_EMAIL_DOMAIN') || '@tjc.org').toLowerCase().trim();
-  const domainSuffix = allowedDomain.startsWith('@') ? allowedDomain : ('@' + allowedDomain);
-
+  
   if (adminList.length > 0) {
     return adminList.includes(userEmail);
   }
-  if (userEmail.endsWith(domainSuffix)) {
-    return true;
-  }
+
+  // Fallback: Check spreadsheet owner and editors if ADMIN_EMAILS not explicitly set
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const owner = ss.getOwner() ? ss.getOwner().getEmail().toLowerCase().trim() : "";
-    if (owner === userEmail) return true;
+    if (owner && owner === userEmail) return true;
   } catch (e) {}
+
+  const allowedDomain = (props.getProperty('ALLOWED_EMAIL_DOMAIN') || '@tjc.org').toLowerCase().trim();
+  const domainSuffix = allowedDomain.startsWith('@') ? allowedDomain : ('@' + allowedDomain);
+  if (userEmail.endsWith(domainSuffix)) {
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const editors = ss.getEditors().map(e => e.getEmail().toLowerCase().trim());
+      if (editors.includes(userEmail)) return true;
+    } catch (e) {}
+  }
+
   return false;
+}
+
+function verifyEventCoordinatorOrAdmin(formId) {
+  if (isAuthorizedAdmin()) return true;
+  const userEmail = Session.getActiveUser().getEmail().toLowerCase().trim();
+  if (!userEmail) throw new Error("Unauthorized: Active user session could not be verified.");
+
+  const props = PropertiesService.getScriptProperties();
+  const monitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const cfg = monitor[formId];
+  if (cfg && cfg.contactEmail && cfg.contactEmail.toLowerCase().trim() === userEmail) {
+    return true;
+  }
+  throw new Error("Unauthorized: You do not have permission to modify or manage this event.");
 }
 
 function invalidateConfigCache() {
@@ -1227,7 +1248,8 @@ function setupLodgingSheet(ss, selectedFieldNames) {
  * Helper formulas for the Printable Check-In sheet so row sorting preserves live links to Lodging and Logistics.
  */
 function getCheckInRoomLookupFormula() {
-  return `=IF(INDIRECT("RC[-3]", FALSE)="", "", IFERROR(INDEX(FILTER(IF(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0))<>"", INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0)) & IF(IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Bed Spot", Lodging!$1:$1, 0)), "")<>"", " (" & IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Bed Spot", Lodging!$1:$1, 0)), "") & ")", ""), "⚠️ Unassigned (Needs Room)"), LOWER(TRIM(Lodging!$A$2:$A))=LOWER(TRIM(INDIRECT("RC[-3]", FALSE))), LOWER(TRIM(Lodging!$B$2:$B))=LOWER(TRIM(INDIRECT("RC[-4]", FALSE))), IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"CANCELLED", IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"WAITLISTED"), 1), "Self / Hotel"))`;
+  const bedSpotMatch = `IFERROR(MATCH("Bed / Spot", Lodging!$1:$1, 0), IFERROR(MATCH("Bed*Spot*", Lodging!$1:$1, 0), MATCH("Bed*", Lodging!$1:$1, 0)))`;
+  return `=IF(INDIRECT("RC[-3]", FALSE)="", "", IFERROR(INDEX(FILTER(IF(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0))<>"", INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0)) & IF(IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, ${bedSpotMatch}), "")<>"", " (" & IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, ${bedSpotMatch}), "") & ")", ""), "⚠️ Unassigned (Needs Room)"), LOWER(TRIM(Lodging!$A$2:$A))=LOWER(TRIM(INDIRECT("RC[-3]", FALSE))), LOWER(TRIM(Lodging!$B$2:$B))=LOWER(TRIM(INDIRECT("RC[-4]", FALSE))), IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"CANCELLED", IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"WAITLISTED"), 1), "Self / Hotel"))`;
 }
 
 function getCheckInGroupLookupFormula() {
@@ -1463,20 +1485,20 @@ function logRegistrationChanges(ss, changeEntries) {
   const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "MM/dd/yyyy h:mm a");
   const cbRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
 
-  for (const entry of changeEntries) {
-    changeSheet.appendRow([
-      false,
-      ts,
-      entry.participantName || "",
-      entry.email || "",
-      entry.category || "Registration Update",
-      entry.summary || "",
-      entry.impactedAssignment || "None assigned yet",
-      ""
-    ]);
-    const lastRow = changeSheet.getLastRow();
-    changeSheet.getRange(lastRow, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
-  }
+  const rows = changeEntries.map(entry => [
+    false,
+    ts,
+    entry.participantName || "",
+    entry.email || "",
+    entry.category || "Registration Update",
+    entry.summary || "",
+    entry.impactedAssignment || "None assigned yet",
+    ""
+  ]);
+
+  const startRow = changeSheet.getLastRow() + 1;
+  changeSheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+  changeSheet.getRange(startRow, 1, rows.length, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
 }
 
 /**
@@ -1576,9 +1598,9 @@ function setupRoomInventorySheet(ss, lodgingSheet, preserveExistingRooms) {
   const formulas = [];
   for (let r = 2; r <= formulaRowsCount + 1; r++) {
     const keyFormula = `=IF(B${r}="", "", IF(A${r}="", B${r}, A${r} & " - " & B${r}))`;
-    const countFormula = `=IF(F${r}="", "", COUNTIFS(Lodging!$${roomColLetter}$2:$${roomColLetter}, F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>CANCELLED"))`;
+    const countFormula = `=IF(F${r}="", "", COUNTIFS(Lodging!$${roomColLetter}$2:$${roomColLetter}, F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>CANCELLED", Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>WAITLISTED"))`;
     const remFormula = `=IF(F${r}="", "", IF(D${r}="", "", D${r} - G${r}))`;
-    const rosterFormula = `=IF(F${r}="", "", IFERROR(TEXTJOIN(", ", TRUE, FILTER(Lodging!$A$2:$A & " " & Lodging!$B$2:$B, Lodging!$${roomColLetter}$2:$${roomColLetter} = F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter} <> "CANCELLED")), ""))`;
+    const rosterFormula = `=IF(F${r}="", "", IFERROR(TEXTJOIN(", ", TRUE, FILTER(Lodging!$A$2:$A & " " & Lodging!$B$2:$B, Lodging!$${roomColLetter}$2:$${roomColLetter} = F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter} <> "CANCELLED", Lodging!$${statusColLetter}$2:$${statusColLetter} <> "WAITLISTED")), ""))`;
     formulas.push([keyFormula, countFormula, remFormula, rosterFormula]);
   }
   roomSheet.getRange(2, 6, formulas.length, 4).setFormulas(formulas);
@@ -1893,17 +1915,21 @@ function setupAirportSummarySheet(ss, hasAirportFields) {
   airportSummarySheet.clear();
   airportSummarySheet.getRange("A1").setValue("Event Airport Summary").setFontWeight("bold").setFontSize(14);
   
+  const respSheet = findResponsesSheet(ss);
+  const respSheetName = respSheet ? respSheet.getName() : "Form Responses 1";
+  const rSheet = "'" + respSheetName.replace(/'/g, "''") + "'";
+
   airportSummarySheet.getRange("A3").setValue("Arrivals by Airport");
   airportSummarySheet.getRange("B3").setValue("Count");
   airportSummarySheet.getRange("A3:B3").setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
-  const arrCol = `MATCH("Arrival City/Airport*", 'Form Responses 1'!1:1, 0)`;
-  airportSummarySheet.getRange("A4").setFormula(`=IFERROR(QUERY({'Form Responses 1'!A2:ZZ}, "SELECT Col" & ${arrCol} & ", COUNT(Col" & ${arrCol} & ") WHERE Col" & ${arrCol} & " IS NOT NULL GROUP BY Col" & ${arrCol} & " ORDER BY COUNT(Col" & ${arrCol} & ") DESC LABEL COUNT(Col" & ${arrCol} & ") ''", 0), {"No arrivals data", ""})`);
+  const arrCol = `MATCH("Arrival City/Airport*", ${rSheet}!1:1, 0)`;
+  airportSummarySheet.getRange("A4").setFormula(`=IFERROR(QUERY({${rSheet}!A2:ZZ}, "SELECT Col" & ${arrCol} & ", COUNT(Col" & ${arrCol} & ") WHERE Col" & ${arrCol} & " IS NOT NULL GROUP BY Col" & ${arrCol} & " ORDER BY COUNT(Col" & ${arrCol} & ") DESC LABEL COUNT(Col" & ${arrCol} & ") ''", 0), {"No arrivals data", ""})`);
   
   airportSummarySheet.getRange("D3").setValue("Departures by Airport");
   airportSummarySheet.getRange("E3").setValue("Count");
   airportSummarySheet.getRange("D3:E3").setFontWeight("bold").setBackground("#4a86e8").setFontColor("white");
-  const depCol = `MATCH("Departure City/Airport*", 'Form Responses 1'!1:1, 0)`;
-  airportSummarySheet.getRange("D4").setFormula(`=IFERROR(QUERY({'Form Responses 1'!A2:ZZ}, "SELECT Col" & ${depCol} & ", COUNT(Col" & ${depCol} & ") WHERE Col" & ${depCol} & " IS NOT NULL GROUP BY Col" & ${depCol} & " ORDER BY COUNT(Col" & ${depCol} & ") DESC LABEL COUNT(Col" & ${depCol} & ") ''", 0), {"No departures data", ""})`);
+  const depCol = `MATCH("Departure City/Airport*", ${rSheet}!1:1, 0)`;
+  airportSummarySheet.getRange("D4").setFormula(`=IFERROR(QUERY({${rSheet}!A2:ZZ}, "SELECT Col" & ${depCol} & ", COUNT(Col" & ${depCol} & ") WHERE Col" & ${depCol} & " IS NOT NULL GROUP BY Col" & ${depCol} & " ORDER BY COUNT(Col" & ${depCol} & ") DESC LABEL COUNT(Col" & ${depCol} & ") ''", 0), {"No departures data", ""})`);
   
   airportSummarySheet.setColumnWidth(1, 300);
   airportSummarySheet.setColumnWidth(2, 100);
@@ -3665,7 +3691,7 @@ function masterRespondToRegistration(e) {
           const isUpdated = flightStatus === "UPDATED";
           const isWait = flightStatus === "WAITLISTED";
           pickupSheet.getRange(foundRowIndex, 1, 1, pickupSheet.getLastColumn())
-                     .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+                     .setFontLine("none")
                      .setBackground(isWait ? "#fff7e0" : (isUpdated ? "#fff2cc" : null))
                      .setFontColor(isWait ? "#b06000" : (isUpdated ? "#b45f06" : null));
         } else {
@@ -3829,7 +3855,7 @@ function masterRespondToRegistration(e) {
           const isUpdated = String(flightStatus).toUpperCase().startsWith("UPDATED");
           const isWait = flightStatus === "WAITLISTED";
           dropoffSheet.getRange(foundRowIndex, 1, 1, dropoffSheet.getLastColumn())
-                     .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+                     .setFontLine("none")
                      .setBackground(isWait ? "#fff7e0" : (isUpdated ? "#fff2cc" : null))
                      .setFontColor(isWait ? "#b06000" : (isUpdated ? "#b45f06" : null));
         } else {
@@ -4110,7 +4136,7 @@ function masterRespondToRegistration(e) {
           const isUpdated = lodgStatus === "UPDATED";
           const isWait = lodgStatus === "WAITLISTED";
           lodgingSheet.getRange(foundLodgRowIndex, 1, 1, lodgingSheet.getLastColumn())
-                      .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+                      .setFontLine("none")
                       .setBackground(isWait ? "#fff7e0" : (isUpdated ? "#fff2cc" : null))
                       .setFontColor(isWait ? "#b06000" : (isUpdated ? "#b45f06" : null));
         } else {
@@ -4305,6 +4331,8 @@ function masterRespondToRegistration(e) {
     if (isRejected) bodyContent = rejectionContent;
     else if (isWaitlisted) bodyContent = waitlistContent;
 
+    let form = null;
+
     // Fast-path: Check trigger event object directly
     if (e && e.response && typeof e.response.getEditResponseUrl === 'function') {
       try {
@@ -4315,10 +4343,11 @@ function masterRespondToRegistration(e) {
     }
 
     if (!editResponseUrl) {
-      let form;
       try {
         const formUrl = responseSs.getFormUrl();
-        form = FormApp.openByUrl(formUrl);
+        if (formUrl) {
+          form = FormApp.openByUrl(formUrl);
+        }
         
         // Pre-index item titles once to eliminate N*M RPC calls
         const itemTitleMap = new Map();
@@ -4530,7 +4559,7 @@ function masterRespondToRegistration(e) {
 }
 
 function testEmailVersions() {
-  const testEmail = "david.liou@tjc.org";
+  const testEmail = Session.getActiveUser().getEmail() || "us.events@tjc.org";
   const testName = "Test User";
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -4753,8 +4782,10 @@ function deleteAllTriggers() {
   }
   
   PropertiesService.getScriptProperties().deleteProperty('FormsToMonitor');
+  // Re-establish essential hourly lifecycle trigger
+  ScriptApp.newTrigger('masterFormLifecycleCron').timeBased().everyHours(1).create();
 
-  ui.alert('Success', `Deleted all ${triggers.length} triggers and cleared monitored events. You can now generate new forms.`, ui.ButtonSet.OK);
+  ui.alert('Success', `Deleted ${triggers.length} triggers and reset monitored events. Re-created the essential masterFormLifecycleCron hourly trigger.`, ui.ButtonSet.OK);
 }
 
 // =======================================================================
@@ -5350,7 +5381,7 @@ function masterFormLifecycleCron() {
     const allTriggers = ScriptApp.getProjectTriggers();
 
     for (const formId in formsToMonitor) {
-      const config = formsToMonitor[formId];
+      const config = normalizeMonitoredConfig(formsToMonitor[formId]);
       // Fast-path skip: If event is already auto-closed, trigger released, and event end date is > 14 days ago, skip opening form
       const endThresholdTime = config.end || config.eventStart;
       if (config.isAutoClosed && config.triggerReleased && endThresholdTime && (now - endThresholdTime > 14 * 24 * 60 * 60 * 1000)) {
@@ -5368,7 +5399,10 @@ function masterFormLifecycleCron() {
               form.setAcceptingResponses(false);
             } catch(e) {}
           }
-          config.isAutoClosed = true;
+          if (!config.isAutoClosed) {
+            config.isAutoClosed = true;
+            changed = true;
+          }
         }
 
         // Trigger Quota Management [V2.9.2]: Auto-release onFormSubmit triggers 14 days after registration closes
@@ -5433,6 +5467,7 @@ function masterFormLifecycleCron() {
             }
           }
         }
+        formsToMonitor[formId] = config;
       } catch (e) {
         const errMsg = String(e.message || e).toLowerCase();
         // Only delete from monitoring if Google explicitly confirms the form no longer exists
@@ -6436,9 +6471,9 @@ function rebuildSummaryDashboardByFormId(formId) {
     targetSs = SpreadsheetApp.openById(destId);
   }
 
-  const responsesSheet = targetSs.getSheetByName("Form Responses 1");
+  const responsesSheet = findResponsesSheet(targetSs);
   if (!responsesSheet) {
-    throw new Error(`Could not find "Form Responses 1" tab in "${targetSs.getName()}".`);
+    throw new Error(`Could not find responses tab in "${targetSs.getName()}".`);
   }
 
   const respData = responsesSheet.getDataRange().getDisplayValues();
@@ -6504,17 +6539,19 @@ function syncLodgingAndRoomsForSheet(targetSs) {
     const bldgIdx = ldH.indexOf("Building");
     const bedIdx = ldH.indexOf("Bed / Spot");
     const notesIdx = ldH.indexOf("Lodging Notes");
+    const statusIdx = ldH.indexOf("Status");
 
     for (let r = 1; r < ldVals.length; r++) {
       const row = ldVals[r];
       const emailKey = emailIdx !== -1 ? String(row[emailIdx] || "").trim().toLowerCase() : "";
       const nameKey = (firstIdx !== -1 && lastIdx !== -1) ?
         `${String(row[firstIdx] || "").trim().toLowerCase()}_${String(row[lastIdx] || "").trim().toLowerCase()}` : "";
-      const prev = (emailKey && savedLodgingMap[emailKey]) || (nameKey && savedLodgingMap[nameKey]) || { room: "", building: "", bedSpot: "", lodgingNotes: "" };
+      const prev = (emailKey && savedLodgingMap[emailKey]) || (nameKey && savedLodgingMap[nameKey]) || { room: "", building: "", bedSpot: "", lodgingNotes: "", status: "" };
       if (roomIdx !== -1 && row[roomIdx]) prev.room = String(row[roomIdx]).trim();
       if (bldgIdx !== -1 && row[bldgIdx]) prev.building = String(row[bldgIdx]).trim();
       if (bedIdx !== -1 && row[bedIdx]) prev.bedSpot = String(row[bedIdx]).trim();
       if (notesIdx !== -1 && row[notesIdx]) prev.lodgingNotes = String(row[notesIdx]).trim();
+      if (statusIdx !== -1 && row[statusIdx]) prev.status = String(row[statusIdx]).trim();
       if (emailKey) savedLodgingMap[emailKey] = prev;
       if (nameKey) savedLodgingMap[nameKey] = prev;
     }
@@ -6554,14 +6591,33 @@ function syncLodgingAndRoomsForSheet(targetSs) {
 
       if (!emailRecipient && firstName === "Registrant" && !lastName) continue;
 
+      let medConsent = "";
+      let emailStat = "";
+      for (const h in responses) {
+        const hl = h.toLowerCase();
+        if (hl.includes("medical consent") || hl.includes("liability release")) medConsent = String(responses[h][0] || "").trim();
+        if (hl === "email status") emailStat = String(responses[h][0] || "").trim();
+      }
+
+      if (medConsent.toLowerCase().startsWith("no") || emailStat.startsWith("Rejected")) {
+        continue;
+      }
+
       const needsLodging = hasStayingQuestion ? isStayingAtChurchResponse(stayingAnswer) : true;
       if (!needsLodging) continue;
+
+      const keyEmail = emailRecipient.toLowerCase().trim();
+      const keyName = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
+      const saved = savedLodgingMap[keyName] || savedLodgingMap[keyEmail] || { room: "", building: "", bedSpot: "", lodgingNotes: "", status: "" };
+
+      const isWait = emailStat.startsWith("Waitlist");
+      const assignedStatus = (saved.status && saved.status.toUpperCase() === "CANCELLED") ? "CANCELLED" : (isWait ? "WAITLISTED" : (saved.status || "Active"));
 
       const newLodgRowData = [];
       for (let i = 0; i < lodgAutoColCount; i++) {
         const lHeader = lodgHeaders[i];
         if (lHeader === "Status") {
-          newLodgRowData.push("Active");
+          newLodgRowData.push(assignedStatus);
           continue;
         }
         let mappedValue = "";
@@ -6591,9 +6647,6 @@ function syncLodgingAndRoomsForSheet(targetSs) {
         newLodgRowData.push(formatSheetTextValue(mappedValue, lHeader === "Phone"));
       }
 
-      const keyEmail = emailRecipient.toLowerCase().trim();
-      const keyName = `${firstName.toLowerCase().trim()}_${lastName.toLowerCase().trim()}`;
-      const saved = savedLodgingMap[keyName] || savedLodgingMap[keyEmail] || { room: "", building: "", bedSpot: "", lodgingNotes: "" };
       if (saved.room) migratedRoomCount++;
 
       const bldgCell = getBuildingLookupFormula();
@@ -6727,14 +6780,14 @@ function syncCheckInAndChangeLogForSheet(targetSs) {
       const ciRow = [
         saved.checkedIn,
         saved.welcomeGift,
-        lastName,
-        firstName,
-        localChurch,
-        arrivalSummary,
+        formatSheetTextValue(lastName),
+        formatSheetTextValue(firstName),
+        formatSheetTextValue(localChurch),
+        formatSheetTextValue(arrivalSummary),
         getCheckInRoomLookupFormula(),
         getCheckInGroupLookupFormula(),
-        saved.notes,
-        emailRecipient
+        formatSheetTextValue(saved.notes),
+        formatSheetTextValue(emailRecipient)
       ];
 
       if (recordIndexMap[compositeKey] !== undefined) {

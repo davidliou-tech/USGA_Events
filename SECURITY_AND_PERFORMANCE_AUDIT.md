@@ -1059,3 +1059,703 @@ function getCheckInGroupLookupFormula() {
 | **P2** | **Issue 2.5** | Bug / Integrity | **Medium** | Hardcoded `"Form Responses 1"` tab name crashes on bilingual and renamed sheets |
 | **P2** | **Issue 3.4** | Performance | **Medium** | Missing cache invalidation serves stale dictionary and template options for 1 hour |
 | **P3** | **Issue 1.5** | Security | **Low** | Hardcoded production Shared Drive ID and Logo asset ID fallback |
+
+
+# Version 4 (V4) Comprehensive Security Audit, Bug Detection, and Performance Review
+**USGA Event Registration System**
+
+---
+
+## Executive Summary (V4)
+
+A comprehensive architectural, security, and static code audit was conducted across the USGA Event Registration ecosystem, evaluating:
+* **Google Apps Script ID:** `1yM5ZN3pPqJ_qDWdtoSEOp5KmU9k82-kRrqIqxhaZoRKkkDw9YpKQnwd5`
+* **GitHub Repository:** `davidliou-lgtm/USGA_Events`
+* **Master Google Sheet:** `1ZfdmYXN82Mtj3fginstI6aItvvBQNsNoj08s6hCNKF0`
+* **Requirements & Technical Specifications Doc:** `1yIBHJEphSfRKoyeady3-rsN_ZJjfye2KHq93wpAP8os`
+
+This V4 audit uncovered several high-impact runtime bugs, security authorization bypasses, and data desynchronizations:
+
+1. **Security & Authorization Audit:**
+   * **Default Admin Privilege Escalation:** `isAuthorizedAdmin()` automatically returns `true` whenever `Session.getActiveUser().getEmail()` is empty (anonymous, masked, or trigger context), or defaults all `@tjc.org` emails to full admins if `ADMIN_EMAILS` is unconfigured.
+   * **Missing Authorization on Client-Callable Mutators:** Critical functions (`archiveMonitoredEvent`, `toggleEventAcceptingResponses`, `updateMonitoredEvent`) lack caller verification, allowing any spreadsheet user to shut down registrations or delete project triggers via client RPC.
+   * **DOM XSS & Scope Collision in `Sidebar.html`:** `escapeHtml` is declared inside `renderFields()`, causing global failure handlers (`onError`) to throw `ReferenceError: escapeHtml is not defined`, while unescaped error strings are injected into `status.innerHTML`.
+   * **Formula Injection in Check-In Synchronization:** `syncCheckInAndChangeLogForSheet` writes participant names and notes directly without text sanitization.
+
+2. **Bug Detection & Data Integrity Check:**
+   * **FATAL: Block-Scoped `let form` ReferenceError:** In `masterRespondToRegistration()`, `let form` is declared inside an `if (!editResponseUrl)` block. The subsequent check `if (form)` outside the block throws a fatal `ReferenceError: form is not defined` for 100% of registrations, aborting email delivery completely.
+   * **Typo in `"Bed / Spot"` Header:** `getCheckInRoomLookupFormula()` queries `MATCH("Bed Spot", Lodging!$1:$1, 0)` instead of `"Bed / Spot"`, causing bed/spot lookups to fail for all attendees.
+   * **Waitlist Corruption in Room Inventory:** Formulas in `Room Inventory` filter on `<>CANCELLED` but omit `<>WAITLISTED`, erroneously reserving rooms and displaying waitlisted attendees on confirmed room rosters.
+   * **Resurrection of Cancelled/Waitlisted Attendees:** `syncLodgingAndRoomsForSheet` forces `Status = "Active"` for all registrants without checking medical consent or waitlist status.
+   * **Public Transport Clusterer Leaks Waitlisted Participants:** `clusterAndChunkTransportation` only skips `CANCELLED` attendees, clustering waitlisted registrants into driver runs on the public sheet.
+   * **Method Signature Exception with `setFontLine(null)`:** `Range.setFontLine(null)` throws runtime exceptions when clearing strikethrough styling during status updates.
+
+3. **Performance & Quota Optimization:**
+   * **$2N$ Loop-Nested Sheets API Calls:** `logRegistrationChanges()` executes iterative `appendRow()` and `setDataValidation()` calls in a loop instead of batching.
+   * **Compacted Keys Desynchronization:** `masterFormLifecycleCron` accesses `config.start` and `config.end` directly without calling `normalizeMonitoredConfig()`, failing to open/close forms when compacted properties are used.
+   * **Trigger Erasure in `deleteAllTriggers()`:** Project triggers are wiped without reinstating essential system cron triggers (`masterFormLifecycleCron`, `backgroundTransportationSync`).
+
+---
+
+## Dimension 1: Security & Authorization Audit (V4)
+
+### Issue 1.1: Default Admin Privilege Escalation via Empty Session and Missing RPC Authorization Guards
+* **Severity:** **Critical**
+* **Location:** `Code.gs`, functions `isAuthorizedAdmin()` (lines 699–727), `archiveMonitoredEvent()` (lines 519–550), `toggleEventAcceptingResponses()` (lines 490–517), `updateMonitoredEvent()` (lines 422–488)
+* **Vulnerability / Bug Description:**
+  1. In `isAuthorizedAdmin()`:
+     ```javascript
+     const userEmail = Session.getActiveUser().getEmail().toLowerCase().trim();
+     if (!userEmail) {
+       ...
+       return true; // LINE 708: Escalates unauthenticated/anonymous calls to Admin!
+     }
+     if (userEmail.endsWith(domainSuffix)) {
+       return true; // LINE 719: Grants all domain users admin rights if ADMIN_EMAILS unset!
+     }
+     ```
+     When caller email cannot be determined (e.g. web app invocation, anonymous access, or restrictive domain settings), `isAuthorizedAdmin()` returns `true`. Furthermore, if `ADMIN_EMAILS` is not configured in `ScriptProperties`, every domain user (including minor registrants or general church members) is granted administrative privileges.
+  2. The administrative functions `archiveMonitoredEvent(formId)`, `toggleEventAcceptingResponses(formId, shouldAccept)`, and `updateMonitoredEvent(formId, updatedConfig)` are exposed globally and callable by any client via `google.script.run`. **None of these three functions verify caller authorization.** Any user with view/edit access to the spreadsheet can execute `google.script.run.archiveMonitoredEvent(...)` from the browser console, shutting down live event registration and deleting triggers.
+* **Impact:** Unauthorized users can open/close registration windows, alter attendee capacity limits, delete triggers, or decommission active event monitoring.
+* **Recommended Fix:**
+  Reject callers with empty emails in `isAuthorizedAdmin()`. Require explicit admin approval or event-specific coordinator ownership before allowing event modification, closure, or archiving.
+
+#### Code Refactoring:
+**Before (`Code.gs:701-727`):**
+```javascript
+function isAuthorizedAdmin() {
+  const userEmail = Session.getActiveUser().getEmail().toLowerCase().trim();
+  if (!userEmail) {
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const editors = ss.getEditors().map(e => e.getEmail().toLowerCase().trim());
+      const owner = ss.getOwner() ? ss.getOwner().getEmail().toLowerCase().trim() : "";
+      if (editors.includes(userEmail) || owner === userEmail) return true;
+    } catch (e) {}
+    return true; // Vulnerable fallback
+  }
+  const props = PropertiesService.getScriptProperties();
+  const adminList = (props.getProperty('ADMIN_EMAILS') || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+  const allowedDomain = (props.getProperty('ALLOWED_EMAIL_DOMAIN') || '@tjc.org').toLowerCase().trim();
+  const domainSuffix = allowedDomain.startsWith('@') ? allowedDomain : ('@' + allowedDomain);
+
+  if (adminList.length > 0) {
+    return adminList.includes(userEmail);
+  }
+  if (userEmail.endsWith(domainSuffix)) {
+    return true; // Overly permissive default
+  }
+  return false;
+}
+```
+
+**After (`Code.gs:701-727`):**
+```javascript
+function isAuthorizedAdmin() {
+  const userEmail = Session.getActiveUser().getEmail().toLowerCase().trim();
+  if (!userEmail) {
+    // Unauthenticated or masked session must never be granted admin privileges
+    return false;
+  }
+  const props = PropertiesService.getScriptProperties();
+  const adminList = (props.getProperty('ADMIN_EMAILS') || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+  
+  if (adminList.length > 0) {
+    return adminList.includes(userEmail);
+  }
+  
+  // Check spreadsheet owner if adminList is not explicitly populated
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const owner = ss.getOwner() ? ss.getOwner().getEmail().toLowerCase().trim() : "";
+    if (owner && owner === userEmail) return true;
+  } catch (e) {}
+  
+  return false;
+}
+
+function verifyEventCoordinatorOrAdmin(formId) {
+  if (isAuthorizedAdmin()) return true;
+  const userEmail = Session.getActiveUser().getEmail().toLowerCase().trim();
+  if (!userEmail) throw new Error("Unauthorized: Session caller cannot be identified.");
+  
+  const props = PropertiesService.getScriptProperties();
+  const monitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+  const cfg = monitor[formId];
+  if (cfg && cfg.contactEmail && cfg.contactEmail.toLowerCase().trim() === userEmail) {
+    return true;
+  }
+  throw new Error("Unauthorized: You do not have permission to modify this event.");
+}
+```
+
+---
+
+### Issue 1.2: Cross-Site Scripting (DOM XSS) & ReferenceError Crash in Sidebar Error Handlers
+* **Severity:** **High**
+* **Location:** `Sidebar.html`, lines 398, 753–761, 946–952
+* **Vulnerability / Bug Description:**
+  1. `escapeHtml()` is declared locally inside `renderFields()` (line 753). In `onError(error)` (line 950), the script executes:
+     ```javascript
+     status.innerHTML = `<strong>Error:</strong> ${escapeHtml(msg)}`;
+     ```
+     Because `escapeHtml` is scoped exclusively inside `renderFields()`, `onError()` crashes with `ReferenceError: escapeHtml is not defined`. The error UI completely freezes, preventing the user from diagnosing form creation failures.
+  2. At line 398:
+     ```javascript
+     status.innerHTML = '<strong>Error loading configuration:</strong> ' + err.message + '<br>...';
+     ```
+     `err.message` is concatenated into `.innerHTML` without escaping, exposing a stored DOM XSS vector if configuration data or sheet tab names contain HTML tags or script injection payloads.
+* **Recommended Fix:**
+  Promote `escapeHtml()` to global script scope in `Sidebar.html`, sanitize `err.message` in the initialization failure handler, and safely encode URLs in `onSuccess`.
+
+#### Code Refactoring:
+**Before (`Sidebar.html:753-761, 946-952`):**
+```javascript
+        function escapeHtml(str) {
+          if (str === null || str === undefined) return '';
+          return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+...
+      function onError(error) {
+        const status = document.getElementById('status');
+        status.className = 'error';
+        const msg = error && error.message ? error.message : String(error);
+        status.innerHTML = `<strong>Error:</strong> ${escapeHtml(msg)}`; // ReferenceError!
+        document.getElementById('generateBtn').disabled = false;
+      }
+```
+
+**After (`Sidebar.html` global scope and `onError`):**
+```javascript
+      // Declare escapeHtml in global script scope
+      function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function sanitizeUrl(url) {
+        if (!url) return '';
+        const clean = String(url).trim();
+        return /^https?:\/\//i.test(clean) ? clean : '#';
+      }
+
+      function onError(error) {
+        const status = document.getElementById('status');
+        status.className = 'error';
+        const msg = error && error.message ? error.message : String(error);
+        status.innerHTML = `<strong>Error:</strong> ${escapeHtml(msg)}`;
+        document.getElementById('generateBtn').disabled = false;
+      }
+```
+
+---
+
+### Issue 1.3: Formula Injection in Check-In Synchronization
+* **Severity:** **High**
+* **Location:** `Code.gs`, function `syncCheckInAndChangeLogForSheet(targetSs)` (lines 6727–6738)
+* **Vulnerability / Bug Description:**
+  In `syncCheckInAndChangeLogForSheet()`, participant rows are assembled:
+  ```javascript
+  const ciRow = [
+    saved.checkedIn,
+    saved.welcomeGift,
+    lastName,          // Unescaped
+    firstName,         // Unescaped
+    localChurch,       // Unescaped
+    arrivalSummary,    // Unescaped
+    getCheckInRoomLookupFormula(),
+    getCheckInGroupLookupFormula(),
+    saved.notes,       // Unescaped
+    emailRecipient     // Unescaped
+  ];
+  ```
+  Unlike `masterRespondToRegistration()` (which wraps text values in `formatSheetTextValue()`), `syncCheckInAndChangeLogForSheet()` populates these fields directly into `participantRecords` and writes them using `.setValues()`. If an attendee inputs a name, local church, or note starting with `=`, `+`, `-`, or `@`, Google Sheets parses the cell as an executable formula upon sync.
+* **Recommended Fix:**
+  Wrap all text values in `formatSheetTextValue()` prior to assembling `ciRow`.
+
+#### Code Refactoring:
+**Before (`Code.gs:6727-6738`):**
+```javascript
+      const ciRow = [
+        saved.checkedIn,
+        saved.welcomeGift,
+        lastName,
+        firstName,
+        localChurch,
+        arrivalSummary,
+        getCheckInRoomLookupFormula(),
+        getCheckInGroupLookupFormula(),
+        saved.notes,
+        emailRecipient
+      ];
+```
+
+**After (`Code.gs:6727-6738`):**
+```javascript
+      const ciRow = [
+        saved.checkedIn,
+        saved.welcomeGift,
+        formatSheetTextValue(lastName),
+        formatSheetTextValue(firstName),
+        formatSheetTextValue(localChurch),
+        formatSheetTextValue(arrivalSummary),
+        getCheckInRoomLookupFormula(),
+        getCheckInGroupLookupFormula(),
+        formatSheetTextValue(saved.notes),
+        formatSheetTextValue(emailRecipient)
+      ];
+```
+
+---
+
+## Dimension 2: Bug Detection & Data Integrity Check (V4)
+
+### Issue 2.1: Block-Scoped `let form` ReferenceError Aborting All Confirmation & Waitlist Emails
+* **Severity:** **Critical**
+* **Location:** `Code.gs`, function `masterRespondToRegistration(e)` (lines 4317–4321, 4386, 4396)
+* **Vulnerability / Bug Description:**
+  In `masterRespondToRegistration(e)`:
+  ```javascript
+  if (!editResponseUrl) {
+    let form; // Declared block-scoped inside 'if'
+    try {
+      const formUrl = responseSs.getFormUrl();
+      form = FormApp.openByUrl(formUrl);
+      ...
+    } catch (e) {}
+  }
+  ...
+  if (form) { // Line 4386: OUTSIDE the 'if (!editResponseUrl)' block!
+    const items = form.getItems(); // Line 4396
+    ...
+  }
+  ```
+  1. Under V8 runtime, `let form;` is scoped strictly to the `if (!editResponseUrl)` block.
+  2. If `editResponseUrl` was already populated directly from `e.response.getEditResponseUrl()`, the `if (!editResponseUrl)` block is skipped entirely, leaving `form` completely undeclared.
+  3. Even if the block executes, once execution exits the block, `form` goes out of scope.
+  4. At line 4386, the statement `if (form)` evaluates in the outer scope, immediately throwing `ReferenceError: form is not defined`.
+  5. The surrounding `try/catch` catches the `ReferenceError`, logs `"masterRespondToRegistration post-processing error: form is not defined"`, and **silently aborts execution before `GmailApp.sendEmail()` or `MailApp.sendEmail()` is ever called.**
+* **Impact:** **No confirmation, waitlist, or rejection emails are ever delivered to registrants.** Every form submission crashes silently at line 4386.
+* **Recommended Fix:**
+  Hoist `let form = null;` to the outer function scope before the edit URL resolution block.
+
+#### Code Refactoring:
+**Before (`Code.gs:4317-4321, 4386`):**
+```javascript
+    if (!editResponseUrl) {
+      let form;
+      try {
+        const formUrl = responseSs.getFormUrl();
+        form = FormApp.openByUrl(formUrl);
+        ...
+      } catch (e) {
+        Logger.log("Could not open form or fetch edit URL: " + e);
+      }
+    }
+    ...
+    if (form) {
+      const items = form.getItems();
+```
+
+**After (`Code.gs:4308-4322, 4386`):**
+```javascript
+    let form = null;
+
+    // Fast-path: Check trigger event object directly
+    if (e && e.response && typeof e.response.getEditResponseUrl === 'function') {
+      try {
+        editResponseUrl = e.response.getEditResponseUrl();
+      } catch (evtErr) {
+        Logger.log("Could not read editResponseUrl directly from event object: " + evtErr.message);
+      }
+    }
+
+    if (!editResponseUrl) {
+      try {
+        const formUrl = responseSs.getFormUrl();
+        if (formUrl) {
+          form = FormApp.openByUrl(formUrl);
+        }
+        ...
+      } catch (e) {
+        Logger.log("Could not open form or fetch edit URL: " + e);
+      }
+    }
+    ...
+    if (form) {
+      const items = form.getItems();
+```
+
+---
+
+### Issue 2.2: Typo in `"Bed / Spot"` Header Breaking Room Lookups on Printable Check-In Tab
+* **Severity:** **High**
+* **Location:** `Code.gs`, function `getCheckInRoomLookupFormula()` (line 1230)
+* **Vulnerability / Bug Description:**
+  In `getCheckInRoomLookupFormula()`:
+  ```excel
+  =IF(..., INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0)) & IF(IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Bed Spot", Lodging!$1:$1, 0)), "")<>"", " (" & IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Bed Spot", Lodging!$1:$1, 0)), "") & ")", ""), ...)
+  ```
+  The formula searches for the header `"Bed Spot"`. However, in `setupLodgingSheet()` (line 1126), the header is defined as:
+  ```javascript
+  const manualHeaders = ["Room Assignment", "Building", "Bed / Spot", "Lodging Notes"];
+  ```
+  Because `"Bed Spot"` does not match `"Bed / Spot"`, `MATCH("Bed Spot", ...)` evaluates to `#N/A`.
+* **Impact:** The bed/spot designation (e.g. `Room 102 (Top Bunk)` or `Room 204 (Cot A)`) is omitted on the printable Check-In sheet for all participants.
+* **Recommended Fix:**
+  Update the formula to match `"Bed / Spot"` with wildcard fallbacks for `"Bed*Spot*"` and `"Bed*"`.
+
+#### Code Refactoring:
+**Before (`Code.gs:1230`):**
+```javascript
+function getCheckInRoomLookupFormula() {
+  return `=IF(INDIRECT("RC[-3]", FALSE)="", "", IFERROR(INDEX(FILTER(IF(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0))<>"", INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0)) & IF(IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Bed Spot", Lodging!$1:$1, 0)), "")<>"", " (" & IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Bed Spot", Lodging!$1:$1, 0)), "") & ")", ""), "⚠️ Unassigned (Needs Room)"), LOWER(TRIM(Lodging!$A$2:$A))=LOWER(TRIM(INDIRECT("RC[-3]", FALSE))), LOWER(TRIM(Lodging!$B$2:$B))=LOWER(TRIM(INDIRECT("RC[-4]", FALSE))), IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"CANCELLED", IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"WAITLISTED"), 1), "Self / Hotel"))`;
+}
+```
+
+**After (`Code.gs:1230`):**
+```javascript
+function getCheckInRoomLookupFormula() {
+  const bedSpotMatch = `IFERROR(MATCH("Bed / Spot", Lodging!$1:$1, 0), IFERROR(MATCH("Bed*Spot*", Lodging!$1:$1, 0), MATCH("Bed*", Lodging!$1:$1, 0)))`;
+  return `=IF(INDIRECT("RC[-3]", FALSE)="", "", IFERROR(INDEX(FILTER(IF(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0))<>"", INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Room Assignment", Lodging!$1:$1, 0)) & IF(IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, ${bedSpotMatch}), "")<>"", " (" & IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, ${bedSpotMatch}), "") & ")", ""), "⚠️ Unassigned (Needs Room)"), LOWER(TRIM(Lodging!$A$2:$A))=LOWER(TRIM(INDIRECT("RC[-3]", FALSE))), LOWER(TRIM(Lodging!$B$2:$B))=LOWER(TRIM(INDIRECT("RC[-4]", FALSE))), IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"CANCELLED", IFERROR(INDEX(Lodging!$A$2:$ZZ, 0, MATCH("Status", Lodging!$1:$1, 0)), "")<>"WAITLISTED"), 1), "Self / Hotel"))`;
+}
+```
+
+---
+
+### Issue 2.3: Waitlisted Registrants Counted Against Room Capacity & Leaked into Room Rosters
+* **Severity:** **High**
+* **Location:** `Code.gs`, function `setupRoomInventorySheet()` (lines 1579, 1581)
+* **Vulnerability / Bug Description:**
+  In `setupRoomInventorySheet()`:
+  ```excel
+  COUNTIFS(Lodging!$${roomColLetter}$2:$${roomColLetter}, F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>CANCELLED")
+  ```
+  and
+  ```excel
+  FILTER(Lodging!$A$2:$A & " " & Lodging!$B$2:$B, Lodging!$${roomColLetter}$2:$${roomColLetter} = F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter} <> "CANCELLED")
+  ```
+  Both formulas filter out `Lodging` rows where `Status = "CANCELLED"`, but **fail to exclude `Status = "WAITLISTED"`**.
+* **Impact:** Waitlisted registrants are counted toward room occupancy, falsely decrementing remaining room capacity and placing unapproved registrants onto host church physical room rosters.
+* **Recommended Fix:**
+  Add `Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>WAITLISTED"` criteria to both the `COUNTIFS` capacity calculation and the `FILTER` live roster formula.
+
+#### Code Refactoring:
+**Before (`Code.gs:1579, 1581`):**
+```javascript
+    const countFormula = `=IF(F${r}="", "", COUNTIFS(Lodging!$${roomColLetter}$2:$${roomColLetter}, F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>CANCELLED"))`;
+    const rosterFormula = `=IF(F${r}="", "", IFERROR(TEXTJOIN(", ", TRUE, FILTER(Lodging!$A$2:$A & " " & Lodging!$B$2:$B, Lodging!$${roomColLetter}$2:$${roomColLetter} = F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter} <> "CANCELLED")), ""))`;
+```
+
+**After (`Code.gs:1579, 1581`):**
+```javascript
+    const countFormula = `=IF(F${r}="", "", COUNTIFS(Lodging!$${roomColLetter}$2:$${roomColLetter}, F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>CANCELLED", Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>WAITLISTED"))`;
+    const rosterFormula = `=IF(F${r}="", "", IFERROR(TEXTJOIN(", ", TRUE, FILTER(Lodging!$A$2:$A & " " & Lodging!$B$2:$B, Lodging!$${roomColLetter}$2:$${roomColLetter} = F${r}, Lodging!$${statusColLetter}$2:$${statusColLetter} <> "CANCELLED", Lodging!$${statusColLetter}$2:$${statusColLetter} <> "WAITLISTED")), ""))`;
+```
+
+---
+
+### Issue 2.4: Cancelled & Waitlisted Registrants Resurrected into Active Lodging by Synchronization Routine
+* **Severity:** **High**
+* **Location:** `Code.gs`, function `syncLodgingAndRoomsForSheet(targetSs)` (lines 6542–6603)
+* **Vulnerability / Bug Description:**
+  In `syncLodgingAndRoomsForSheet()`:
+  1. The function iterates over `Form Responses 1` but **does not inspect `Medical Consent` or `Email Status`**.
+  2. Line 6564 forces every record's status to `"Active"`:
+     ```javascript
+     if (lHeader === "Status") {
+       newLodgRowData.push("Active");
+       continue;
+     }
+     ```
+  3. Even if a participant's registration was rejected (Medical Consent = "No"), placed on the waitlist, or cancelled by the coordinator, running "Sync Lodging and Rooms" overwrites their status to `"Active"` on `Lodging`.
+* **Impact:** Rejected and waitlisted applicants are restored as confirmed attendees and allocated church accommodations during maintenance synchronization.
+* **Recommended Fix:**
+  Check `Medical Consent` and `Email Status` in `syncLodgingAndRoomsForSheet()` and preserve existing `CANCELLED` and `WAITLISTED` statuses.
+
+#### Code Refactoring:
+**Before (`Code.gs:6554-6567`):**
+```javascript
+      if (!emailRecipient && firstName === "Registrant" && !lastName) continue;
+
+      const needsLodging = hasStayingQuestion ? isStayingAtChurchResponse(stayingAnswer) : true;
+      if (!needsLodging) continue;
+
+      const newLodgRowData = [];
+      for (let i = 0; i < lodgAutoColCount; i++) {
+        const lHeader = lodgHeaders[i];
+        if (lHeader === "Status") {
+          newLodgRowData.push("Active");
+          continue;
+        }
+```
+
+**After (`Code.gs:6554-6567`):**
+```javascript
+      if (!emailRecipient && firstName === "Registrant" && !lastName) continue;
+
+      let medConsent = "";
+      let emailStat = "";
+      for (const h in responses) {
+        const hl = h.toLowerCase();
+        if (hl.includes("medical consent") || hl.includes("liability release")) medConsent = String(responses[h][0] || "").trim();
+        if (hl === "email status") emailStat = String(responses[h][0] || "").trim();
+      }
+
+      if (medConsent.toLowerCase().startsWith("no") || emailStat.startsWith("Rejected")) {
+        continue;
+      }
+
+      const isWait = emailStat.startsWith("Waitlist");
+      const needsLodging = hasStayingQuestion ? isStayingAtChurchResponse(stayingAnswer) : true;
+      if (!needsLodging) continue;
+
+      const newLodgRowData = [];
+      for (let i = 0; i < lodgAutoColCount; i++) {
+        const lHeader = lodgHeaders[i];
+        if (lHeader === "Status") {
+          newLodgRowData.push(isWait ? "WAITLISTED" : "Active");
+          continue;
+        }
+```
+
+---
+
+### Issue 2.5: Public Transportation Bin-Packing Leaks Waitlisted Participants into Volunteer Driver Signups
+* **Severity:** **High**
+* **Location:** `TransportationSync.gs`, function `clusterAndChunkTransportation` (lines 301–304)
+* **Vulnerability / Bug Description:**
+  In `clusterAndChunkTransportation`:
+  ```javascript
+  const status = statusIdx !== -1 ? String(row[statusIdx] || "").trim() : "Active";
+  if (status.toUpperCase() === "CANCELLED") continue;
+  ```
+  The filter checks only for `"CANCELLED"`. When an event reaches maximum capacity, excess registrants receive `flightStatus = "WAITLISTED"` on `Pickup` and `Drop-Off`. Because `"WAITLISTED"` is not skipped, the bin-packing algorithm packs waitlisted passengers into vehicle slots, generates `Trip Sub-ID`s, and pushes them to the public `Volunteer Driver Signups` spreadsheet.
+* **Impact:** Volunteer church drivers claim and dispatch vehicles for waitlisted individuals who are not permitted to attend the event.
+* **Recommended Fix:**
+  Skip records where `status.toUpperCase() === "WAITLISTED"`.
+
+#### Code Refactoring:
+**Before (`TransportationSync.gs:301-304`):**
+```javascript
+  for (let r = 1; r < data.length; r++) {
+    const row = data[r];
+    const status = statusIdx !== -1 ? String(row[statusIdx] || "").trim() : "Active";
+    if (status.toUpperCase() === "CANCELLED") continue;
+```
+
+**After (`TransportationSync.gs:301-304`):**
+```javascript
+  for (let r = 1; r < data.length; r++) {
+    const row = data[r];
+    const status = statusIdx !== -1 ? String(row[statusIdx] || "").trim() : "Active";
+    const statusUpper = status.toUpperCase();
+    if (statusUpper === "CANCELLED" || statusUpper === "WAITLISTED") continue;
+```
+
+---
+
+### Issue 2.6: Method Signature Exception via `setFontLine(null)` Crashing Status Updates on Operational Tabs
+* **Severity:** **Medium**
+* **Location:** `Code.gs`, `masterRespondToRegistration(e)` (lines 3668, 3832, 4113)
+* **Vulnerability / Bug Description:**
+  When updating active records on `Pickup`, `Drop-Off`, or `Lodging`, the styling call is executed as:
+  ```javascript
+  sheet.getRange(foundRowIndex, 1, 1, sheet.getLastColumn())
+       .setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+  ```
+  When `isWait` and `isCancelled` are false, the argument is `null`. In Google Apps Script, `Range.setFontLine(fontLine)` accepts only string values (`"underline"`, `"line-through"`, or `"none"`). Passing `null` throws `Exception: The parameters (null) don't match the method signature for Range.setFontLine`.
+* **Impact:** Registration updates fail with unhandled exceptions during operational sheet processing.
+* **Recommended Fix:**
+  Pass `"none"` instead of `null` to reset font decorations.
+
+#### Code Refactoring:
+**Before (`Code.gs:3668, 3832, 4113`):**
+```javascript
+.setFontLine(isWait ? "none" : (isCancelled ? "none" : null))
+```
+
+**After (`Code.gs:3668, 3832, 4113`):**
+```javascript
+.setFontLine("none")
+```
+
+---
+
+## Dimension 3: Performance & Quota Optimization (V4)
+
+### Issue 3.1: $2N$ Synchronous RPC Loop in `logRegistrationChanges`
+* **Severity:** **Medium**
+* **Location:** `Code.gs`, function `logRegistrationChanges(ss, changeEntries)` (lines 1466–1479)
+* **Vulnerability / Bug Description:**
+  In `logRegistrationChanges`:
+  ```javascript
+  for (const entry of changeEntries) {
+    changeSheet.appendRow([...]);
+    const lastRow = changeSheet.getLastRow();
+    changeSheet.getRange(lastRow, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
+  }
+  ```
+  Iterating with `appendRow()` and `setDataValidation()` inside the loop incurs $2N$ remote Sheets RPCs. During burst submissions with multiple changes, this introduces avoidable latency.
+* **Recommended Fix:**
+  Construct a 2D matrix of rows, execute a single `setValues()` batch write, and apply `setDataValidation()` in one operation across the range.
+
+#### Code Refactoring:
+**Before (`Code.gs:1466-1479`):**
+```javascript
+  for (const entry of changeEntries) {
+    changeSheet.appendRow([
+      false,
+      ts,
+      entry.participantName || "",
+      entry.email || "",
+      entry.category || "Registration Update",
+      entry.summary || "",
+      entry.impactedAssignment || "None assigned yet",
+      ""
+    ]);
+    const lastRow = changeSheet.getLastRow();
+    changeSheet.getRange(lastRow, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
+  }
+```
+
+**After (`Code.gs:1466-1479`):**
+```javascript
+  const rows = changeEntries.map(entry => [
+    false,
+    ts,
+    entry.participantName || "",
+    entry.email || "",
+    entry.category || "Registration Update",
+    entry.summary || "",
+    entry.impactedAssignment || "None assigned yet",
+    ""
+  ]);
+
+  const startRow = changeSheet.getLastRow() + 1;
+  changeSheet.getRange(startRow, 1, rows.length, 8).setValues(rows);
+  changeSheet.getRange(startRow, 1, rows.length, 1).setDataValidation(cbRule).setHorizontalAlignment("center");
+```
+
+---
+
+### Issue 3.2: Compacted Keys Desynchronization in `masterFormLifecycleCron` & Artificial 24h Registration Delay
+* **Severity:** **Medium**
+* **Location:** `Code.gs`, `masterFormLifecycleCron()` (lines 5353–5415) and `syncActiveEventsFromSystemLog()` (line 216)
+* **Vulnerability / Bug Description:**
+  1. `masterFormLifecycleCron` reads `formsToMonitor[formId]` directly without calling `normalizeMonitoredConfig(cfg)`. When compacted property keys (`s`, `e`, `es`) are used to prevent the 9 KB ScriptProperties limit, `config.start`, `config.end`, and `config.eventStart` resolve to `undefined`. Comparisons like `now > config.end + 24*60*60*1000` evaluate to `now > NaN` (`false`), leaving expired forms permanently open.
+  2. In `syncActiveEventsFromSystemLog()`, `isExactEnd: false` is hardcoded (line 216). When events specify exact end times (e.g. `10/15/2026 23:59`), line 5408 adds an extra 24 hours (`config.end + 24*60*60*1000`), keeping forms accepting submissions for a full 24 hours past the coordinator's stated deadline.
+* **Recommended Fix:**
+  Wrap each config in `normalizeMonitoredConfig()`, and infer `isExactEnd: true` whenever the date string contains a colon (`:`).
+
+#### Code Refactoring:
+**Before (`Code.gs:5353, line 216`):**
+```javascript
+      const config = formsToMonitor[formId];
+...
+      isExactEnd: false,
+```
+
+**After (`Code.gs:5353, line 216`):**
+```javascript
+      const config = normalizeMonitoredConfig(formsToMonitor[formId]);
+...
+      isExactEnd: !!(row[regCloseIdx] && String(row[regCloseIdx]).includes(':')),
+```
+
+---
+
+### Issue 3.3: Missing Trigger Re-Creation in `deleteAllTriggers` & Hardcoded Test Recipient
+* **Severity:** **Low**
+* **Location:** `Code.gs`, functions `deleteAllTriggers()` (lines 4750–4758) and `testEmailVersions()` (line 4533)
+* **Vulnerability / Bug Description:**
+  1. `deleteAllTriggers()` removes all project triggers (including `masterFormLifecycleCron` and `backgroundTransportationSync`), leaving no automated triggers running without re-creating the baseline crons.
+  2. `testEmailVersions()` has hardcoded `const testEmail = "david.liou@tjc.org"`.
+* **Recommended Fix:**
+  Prompt or automatically re-create baseline cron triggers after trigger purge, and default `testEmail` to `Session.getActiveUser().getEmail()`.
+
+#### Code Refactoring:
+**Before (`Code.gs:4533, 4750-4758`):**
+```javascript
+  const testEmail = "david.liou@tjc.org";
+...
+  for (let i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);
+  }
+  PropertiesService.getScriptProperties().deleteProperty('FormsToMonitor');
+```
+
+**After (`Code.gs:4533, 4750-4758`):**
+```javascript
+  const testEmail = Session.getActiveUser().getEmail() || "us.events@tjc.org";
+...
+  for (let i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);
+  }
+  PropertiesService.getScriptProperties().deleteProperty('FormsToMonitor');
+  // Re-establish essential hourly lifecycle trigger
+  ScriptApp.newTrigger('masterFormLifecycleCron').timeBased().everyHours(1).create();
+```
+
+---
+
+## Action Plan & Priority Remediation Matrix (V4)
+
+| Priority | Issue Reference | Category | Severity | Direct Impact |
+| :--- | :--- | :--- | :--- | :--- |
+| **P0** | **Issue 2.1** | Bug / Integrity | **Critical** | Block-scoped `let form` ReferenceError crashes email delivery for 100% of registrants |
+| **P0** | **Issue 1.1** | Security | **Critical** | Default admin privilege escalation on empty sessions; unauthenticated event deletion/closure |
+| **P1** | **Issue 2.2** | Bug / Integrity | **High** | `"Bed Spot"` typo fails bed lookup formulas across printable Check-In sheets |
+| **P1** | **Issue 2.3** | Data Integrity | **High** | Waitlisted registrants counted in room capacity and shown on confirmed room rosters |
+| **P1** | **Issue 2.4** | Data Integrity | **High** | Cancelled & waitlisted registrants resurrected to `"Active"` by lodging synchronization routine |
+| **P1** | **Issue 2.5** | Bug / Privacy | **High** | Public driver clusterer leaks waitlisted participants into volunteer vehicle signups |
+| **P1** | **Issue 1.2** | Security / Bug | **High** | `Sidebar.html` `escapeHtml` scoping crash freezes error UI; stored XSS in initialization error |
+| **P1** | **Issue 1.3** | Security | **High** | Formula injection in Check-In tab synchronization from unescaped participant inputs |
+| **P2** | **Issue 2.6** | Bug / Integrity | **Medium** | `setFontLine(null)` throws method signature exception during status updates |
+| **P2** | **Issue 3.1** | Performance | **Medium** | Iterative $2N$ `appendRow()` and `setDataValidation()` RPCs in `logRegistrationChanges` |
+| **P2** | **Issue 3.2** | Performance / Bug| **Medium** | Compacted properties desync in lifecycle cron & artificial 24h delay on closed forms |
+| **P3** | **Issue 3.3** | Robustness | **Low** | `deleteAllTriggers` fails to re-create core cron triggers; hardcoded test email recipient |
+
+---
+
+## Sequence of Fixes
+
+To remediate these issues systematically without breaking dependencies or operational workflows, implement fixes in the following order:
+
+```mermaid
+flowchart TD
+    Step1["Step 1 (P0): Hoist 'let form' in masterRespondToRegistration()"] --> Step2["Step 2 (P0): Patch isAuthorizedAdmin() & enforce RPC mutator checks"]
+    Step2 --> Step3["Step 3 (P1): Fix Check-In & Room Inventory formulas ('Bed / Spot' & waitlist exclusion)"]
+    Step3 --> Step4["Step 4 (P1): Filter waitlisted & cancelled records from Lodging & Public Transport sync"]
+    Step4 --> Step5["Step 5 (P1): Sanitize inputs in syncCheckInAndChangeLog & fix Sidebar.html escapeHtml scope"]
+    Step5 --> Step6["Step 6 (P2): Replace setFontLine(null) with 'none' & batch logRegistrationChanges()"]
+    Step6 --> Step7["Step 7 (P2/P3): Normalize lifecycle cron properties & restore baseline triggers"]
+```
+
+1. **Phase 1: Critical Auto-Responder & Security Remediation (Immediate)**
+   * **Fix Issue 2.1:** In `Code.gs`, hoist `let form = null;` before line 4308 so line 4386 has access to `form`, immediately unblocking automated confirmation and waitlist email dispatch.
+   * **Fix Issue 1.1:** In `Code.gs`, remove the permissive `return true` fallback in `isAuthorizedAdmin()`, and add `verifyEventCoordinatorOrAdmin(formId)` checks to `archiveMonitoredEvent()`, `toggleEventAcceptingResponses()`, and `updateMonitoredEvent()`.
+
+2. **Phase 2: Roster & Rooming Data Integrity Patches**
+   * **Fix Issue 2.2:** In `Code.gs:1230`, update `getCheckInRoomLookupFormula()` to match `"Bed / Spot"` (or wildcard `"Bed*Spot*"`).
+   * **Fix Issue 2.3:** In `Code.gs:1579, 1581`, append `Lodging!$${statusColLetter}$2:$${statusColLetter}, "<>WAITLISTED"` to both the capacity `COUNTIFS` and roster `FILTER` formulas.
+   * **Fix Issue 2.4:** In `Code.gs:6554`, skip rejected registrants and assign `isWait ? "WAITLISTED" : "Active"` in `syncLodgingAndRoomsForSheet()`.
+   * **Fix Issue 2.5:** In `TransportationSync.gs:303`, skip `WAITLISTED` records in `clusterAndChunkTransportation()`.
+
+3. **Phase 3: Sanitization, Scoping, and Operational Polish**
+   * **Fix Issue 1.2:** In `Sidebar.html`, move `escapeHtml()` to global script scope and escape `err.message` at line 398.
+   * **Fix Issue 1.3:** In `Code.gs:6727`, wrap participant strings in `formatSheetTextValue()`.
+   * **Fix Issue 2.6:** In `Code.gs:3668, 3832, 4113`, change `.setFontLine(isWait ? "none" : (isCancelled ? "none" : null))` to `.setFontLine("none")`.
+   * **Fix Issue 3.1:** In `Code.gs:1466`, refactor `logRegistrationChanges()` to a single `setValues()` batch.
+   * **Fix Issue 3.2:** In `Code.gs:5353`, call `normalizeMonitoredConfig()` in `masterFormLifecycleCron()`, and detect exact end times in `syncActiveEventsFromSystemLog()`.
+   * **Fix Issue 3.3:** In `Code.gs:4533, 4758`, use `Session.getActiveUser().getEmail()` in `testEmailVersions()` and re-create `masterFormLifecycleCron` in `deleteAllTriggers()`.

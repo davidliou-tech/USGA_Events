@@ -21,6 +21,11 @@ Comprehensive Google Apps Script suite powering automated event registration, Go
 - **Dual-Sheet Transportation Sync**:
   - Decouples coordinator logistics from public volunteer drivers via a dedicated Public Driver Signup Workbook.
   - Masks attendee names and withholds contact PII while dynamically packing families and arrival clusters into vehicle slots using First-Fit-Decreasing bin packing.
+- **Security & Data Integrity**:
+  - Session-aware role-based access control protecting administrative endpoints and event modifications.
+  - Contextual output encoding (`escapeHtml`, `sanitizeUrl`) defending against Cross-Site Scripting (XSS) in UI modals.
+  - Formula injection sanitization on attendee check-in and roster synchronizations.
+  - Live waitlist exclusion preventing unconfirmed attendees from consuming rooming capacities or leaking onto public driver rosters.
 - **Registration Lifecycle & Capacity Automation**:
   - Scheduled registration windows (`regStartDate` to `regEndDate`) with automatic opening and closing.
   - Automatic form closure as soon as the event itself begins (`eventStart`).
@@ -35,10 +40,11 @@ Comprehensive Google Apps Script suite powering automated event registration, Go
 - `Sidebar.html`: Main event creation UI sidebar (and wide modal dialog).
 - `ManageEventsSidebar.html`: Active event management interface for adjusting windows, capacities, coordinator emails, lodging, and driver sheets.
 - `TransportationSync.gs`: Bidirectional dual-sheet sync engine for volunteer driver rosters and vehicle slot assignments.
+- `SECURITY_AND_PERFORMANCE_AUDIT.md`: Comprehensive security audit, vulnerability analysis, and priority remediation log.
 - `RELEASE_NOTES.md`: Comprehensive historical changelog across all versions.
 
 ---
 
 ## Recent Updates
 
-See [`RELEASE_NOTES.md`](file:///Users/mbpliou5/Documents/USGA%20Projects/RELEASE_NOTES.md) for complete version history and details on the latest releases (v2.10.1 and v2.10.0).
+See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for complete version history and details on the latest releases (v2.10.2 and v2.10.1).

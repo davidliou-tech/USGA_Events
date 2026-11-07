@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.10.1 (Current) - Event-Start Form Closure & Active Events Inactive Filter](#version-2101)
+- [Version 2.10.2 (Current) - Security Hardening, Critical Auto-Responder & Performance Remediation](#version-2102)
+- [Version 2.10.1 - Event-Start Form Closure & Active Events Inactive Filter](#version-2101)
 - [Version 2.10.0 - System Log Linked Event Resolver & Zero-Copy Maintenance Workflows](#version-2100)
 - [Version 2.9.9 - Printable Check-In Sheet, Registration Change Log & Automatic Room Release](#version-299)
 - [Version 2.9.8 - Summary Dashboard Resilience, Dynamic Ingestion & Multilingual Formula Hardening](#version-298)
@@ -26,6 +27,39 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-2102"></a>
+## Version 2.10.2
+*November 2026*
+
+### Security Hardening, Critical Auto-Responder & Performance Remediation
+
+- **Critical Auto-Responder Email Delivery Restored (`masterRespondToRegistration`)**:
+  - **Fatal Scoping ReferenceError Resolved**: Hoisted `let form = null;` to function scope before line 4334. Previously, `let form` was declared inside a block conditional (`if (!editResponseUrl)`), which caused referencing `form` at line 4386 to throw a fatal `ReferenceError: form is not defined`. This error was silently caught by the outer catch block, blocking confirmation, waitlist, and rejection emails for 100% of registrants.
+  - **Font Line Method Signature Exception**: Replaced `.setFontLine(isWait ? "none" : (isCancelled ? "none" : null))` with `.setFontLine("none")` across `pickupSheet`, `dropoffSheet`, and `lodgingSheet`. Passing `null` to `Range.setFontLine()` triggered a method signature exception in the Apps Script runtime during status updates.
+
+- **Security & Authorization Hardening**:
+  - **Admin Privilege Escalation Defeated (`isAuthorizedAdmin`)**: Removed the insecure `return true` fallback when `Session.getActiveUser().getEmail()` returns an empty string (common in anonymous triggers or web app contexts). Unauthenticated sessions now strictly evaluate to `false`.
+  - **Protected RPC Mutators (`verifyEventCoordinatorOrAdmin`)**: Implemented coordinator verification so non-admins can only modify events where their authenticated email matches `cfg.contactEmail`. Enforced checks on `updateMonitoredEvent()`, `toggleEventAcceptingResponses()`, and `archiveMonitoredEvent()`.
+  - **XSS & DOM Injection Mitigation in Sidebar (`Sidebar.html`)**: Declared `escapeHtml()` and `sanitizeUrl()` in the global `<script>` scope. Escaped `err.message` in initialization failure handlers and sanitized all output URLs (`publishedUrl`, `editUrl`, `sheetUrl`, `publicTransportUrl`, `folderUrl`) before DOM insertion.
+  - **Formula Injection Defense (`syncCheckInAndChangeLogForSheet`)**: Wrapped attendee input values (`lastName`, `firstName`, `localChurch`, `arrivalSummary`, `saved.notes`, `emailRecipient`) in `formatSheetTextValue()` to neutralize spreadsheet formula injection (`=`, `+`, `-`, `@`).
+
+- **Roster & Capacity Integrity**:
+  - **Waitlist Exclusion from Public Driver Signup (`TransportationSync.gs`)**: Updated `clusterAndChunkTransportation()` to filter out both `CANCELLED` and `WAITLISTED` registrants (`statusUpper === "CANCELLED" || statusUpper === "WAITLISTED"`), preventing waitlisted attendees from being exposed or claiming driver vehicle slots.
+  - **Room Capacity & Roster Accuracy (`setupRoomInventorySheet`)**: Added `<>WAITLISTED` exclusion criteria to the `COUNTIFS` capacity calculation (Column G) and `FILTER` live roster formulas (Column I) so waitlisted participants do not consume host church room capacities or appear on confirmed occupant rosters.
+  - **Resilient Bed Spot Lookup (`getCheckInRoomLookupFormula`)**: Fixed `"Bed Spot"` column lookup failure on printable Check-In sheets by matching `"Bed / Spot"` with resilient wildcard fallback (`IFERROR(MATCH("Bed / Spot", Lodging!$1:$1, 0), IFERROR(MATCH("Bed*Spot*", Lodging!$1:$1, 0), MATCH("Bed*", Lodging!$1:$1, 0)))`).
+  - **Lodging Sync Filter & Status Preservation (`syncLodgingAndRoomsForSheet`)**:
+    - Filtered out records where `Medical Consent = "No"` or `Email Status` is `Rejected`.
+    - Automatically mapped waitlisted registrants to `WAITLISTED` status and preserved existing `CANCELLED` statuses in `Lodging` when re-syncing.
+
+- **Performance & Trigger Management Optimization**:
+  - **Change Log Batch Processing (`logRegistrationChanges`)**: Refactored row insertion from iterative $2N$ Sheets API roundtrips (`appendRow()` + `setDataValidation()`) to a single batch 2D array `.setValues()` call and range checkbox validation.
+  - **Lifecycle Cron Config Normalization (`masterFormLifecycleCron`)**: Wrapped monitored event config retrievals in `normalizeMonitoredConfig()` to maintain property consistency, and detected exact close timestamps (`:`) in `syncActiveEventsFromSystemLog()` to prevent artificial 24-hour delays on closed forms.
+  - **Resilient Response Sheet Resolution**: Replaced hardcoded `'Form Responses 1'` sheet references in `setupAirportSummarySheet()` and `rebuildSummaryDashboardByFormId()` with dynamic `findResponsesSheet()` to support multilingual response tab names.
+  - **Trigger Cleanup Safety (`deleteAllTriggers`)**: Re-creates the essential hourly `masterFormLifecycleCron` trigger immediately after resetting project triggers.
+  - **Personal Email Scrubbing (`testEmailVersions`)**: Defaulted test email dispatch to `Session.getActiveUser().getEmail() || "us.events@tjc.org"`, eliminating hardcoded personal email addresses.
 
 ---
 
