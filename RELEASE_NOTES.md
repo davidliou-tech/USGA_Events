@@ -5,7 +5,8 @@ This document provides a complete, unified historical record of all versions, fe
 ---
 
 ## Table of Contents
-- [Version 2.10.0 (Current) - System Log Linked Event Resolver & Zero-Copy Maintenance Workflows](#version-2100)
+- [Version 2.10.1 (Current) - Event-Start Form Closure & Active Events Inactive Filter](#version-2101)
+- [Version 2.10.0 - System Log Linked Event Resolver & Zero-Copy Maintenance Workflows](#version-2100)
 - [Version 2.9.9 - Printable Check-In Sheet, Registration Change Log & Automatic Room Release](#version-299)
 - [Version 2.9.8 - Summary Dashboard Resilience, Dynamic Ingestion & Multilingual Formula Hardening](#version-298)
 - [Version 2.9.7 - Confirmation Email Title Deduplication Fix](#version-297)
@@ -25,6 +26,28 @@ This document provides a complete, unified historical record of all versions, fe
 - [Version 2.2.0 - Email Routing Disambiguation & Template Reorganization](#version-220)
 - [Version 2.1.0 - Minor Compliance, Parental Consent & Sender Verification](#version-210)
 - [Version 2.0.0 - Full V2 System Architecture Ground-Up Rewrite](#version-200)
+
+---
+
+<a name="version-2101"></a>
+## Version 2.10.1
+*November 2026*
+
+### Event-Start Form Auto-Closure & Active Events Inactive Form Filter
+- **Automated Registration Closure When Event Begins (`eventStart`)**:
+  - Enhanced `generateForm()` to capture and store the event's actual start date timestamp (`eventStart`) in `FormsToMonitor` properties.
+  - Upgraded the hourly lifecycle cron (`masterFormLifecycleCron`):
+    - Automatically closes the registration form (`form.setAcceptingResponses(false)`) as soon as the event start date/time arrives (`now >= config.eventStart`).
+    - Immediately applies the custom post-event closure notice to the form.
+  - Added event-start closure verification during initial form generation: forms generated after the event has already started are immediately closed upon provisioning.
+- **Active Events Dropdown Inactive/Closed Form Filtering (`getMonitoredEvents`)**:
+  - `getMonitoredEvents()` now verifies live acceptance status (`form.isAcceptingResponses()`).
+  - Closed forms are automatically excluded from the active events dropdown in the **Manage Active Events** sidebar, unless scheduled with a future start date.
+- **System Log Auto-Sync Hardening (`syncActiveEventsFromSystemLog`)**:
+  - Automatically flags newly synced closed forms with `isAutoClosed: true` and respects `Archive Status: Archived` in `System Log`.
+  - Added support for tracking `eventStart` across manual updates in `updateMonitoredEvent()`.
+- **System Log Schema Alignment**:
+  - Ensured `System Log` includes `Archive Status` (Column K) with standardized header formatting to clearly delineate archived/inactive events from active event monitoring.
 
 ---
 
