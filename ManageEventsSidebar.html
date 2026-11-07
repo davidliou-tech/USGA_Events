@@ -257,6 +257,10 @@
           .replace(/'/g, '&#39;');
       }
 
+      function safeHtmlMessage(msg) {
+        return escapeHtml(String(msg || '')).replace(/\n/g, '<br>');
+      }
+
       function loadEvents() {
         document.getElementById('loadingEvents').style.display = 'block';
         google.script.run
@@ -585,7 +589,7 @@
           })
           .withFailureHandler(function(err) {
             status.className = 'error';
-            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error:</strong> ' + escapeHtml(err && err.message ? err.message : String(err));
             btn.disabled = false;
           })
           .updateMonitoredEvent(formId, updatedConfig);
@@ -606,16 +610,16 @@
             btn.disabled = false;
             if (res && res.success) {
               status.className = 'success';
-              status.innerHTML = '<strong>Success!</strong> ' + res.message.replace(/\n/g, '<br>');
+              status.innerHTML = '<strong>Success!</strong> ' + safeHtmlMessage(res.message);
             } else {
               status.className = 'error';
-              status.innerHTML = '<strong>Notice:</strong> ' + (res ? res.message : 'Unable to sync.');
+              status.innerHTML = '<strong>Notice:</strong> ' + safeHtmlMessage(res ? res.message : 'Unable to sync.');
             }
           })
           .withFailureHandler(function(err) {
             btn.disabled = false;
             status.className = 'error';
-            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error:</strong> ' + escapeHtml(err && err.message ? err.message : String(err));
           })
           .syncLodgingAndRoomsByFormId(formId);
       }
@@ -643,16 +647,16 @@
             btn.disabled = false;
             if (res && res.success) {
               status.className = 'success';
-              status.innerHTML = '<strong>Success!</strong> ' + res.message.replace(/\n/g, '<br>');
+              status.innerHTML = '<strong>Success!</strong> ' + safeHtmlMessage(res.message);
             } else {
               status.className = 'error';
-              status.innerHTML = '<strong>Notice:</strong> ' + (res ? res.message : 'Unable to import rooms.');
+              status.innerHTML = '<strong>Notice:</strong> ' + safeHtmlMessage(res ? res.message : 'Unable to import rooms.');
             }
           })
           .withFailureHandler(function(err) {
             btn.disabled = false;
             status.className = 'error';
-            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error:</strong> ' + escapeHtml(err && err.message ? err.message : String(err));
           })
           .importHostChurchRoomsForEvent(formId, sourceUrl);
       }
@@ -671,12 +675,12 @@
           .withSuccessHandler(function(res) {
             btn.disabled = false;
             status.className = 'success';
-            status.innerHTML = '<strong>Success!</strong> ' + (res ? res.message : 'Summary Dashboard rebuilt successfully.');
+            status.innerHTML = '<strong>Success!</strong> ' + safeHtmlMessage(res ? res.message : 'Summary Dashboard rebuilt successfully.');
           })
           .withFailureHandler(function(err) {
             btn.disabled = false;
             status.className = 'error';
-            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error:</strong> ' + escapeHtml(err && err.message ? err.message : String(err));
           })
           .rebuildSummaryDashboardByFormId(formId);
       }
@@ -696,16 +700,16 @@
             btn.disabled = false;
             if (res && res.success) {
               status.className = 'success';
-              status.innerHTML = '<strong>Success!</strong> ' + res.message.replace(/\n/g, '<br>');
+              status.innerHTML = '<strong>Success!</strong> ' + safeHtmlMessage(res.message);
             } else {
               status.className = 'error';
-              status.innerHTML = '<strong>Notice:</strong> ' + (res ? res.message : 'Unable to sync.');
+              status.innerHTML = '<strong>Notice:</strong> ' + safeHtmlMessage(res ? res.message : 'Unable to sync.');
             }
           })
           .withFailureHandler(function(err) {
             btn.disabled = false;
             status.className = 'error';
-            status.innerHTML = '<strong>Error:</strong> ' + err.message;
+            status.innerHTML = '<strong>Error:</strong> ' + escapeHtml(err && err.message ? err.message : String(err));
           })
           .syncTransportationByFormId(formId);
       }
@@ -725,7 +729,7 @@
             btn.disabled = false;
             if (res && res.success) {
               status.className = 'success';
-              status.innerHTML = '<strong>Success!</strong> ' + res.message.replace(/\n/g, '<br>');
+              status.innerHTML = '<strong>Success!</strong> ' + safeHtmlMessage(res.message);
               if (res.sheetUrl) {
                 const linkCont = document.getElementById('publicTransportLinkContainer');
                 const link = document.getElementById('publicTransportLink');
@@ -734,7 +738,7 @@
               }
             } else {
               status.className = 'error';
-              status.innerHTML = '<strong>Error:</strong> ' + (res ? res.message : 'Failed to create sheet.');
+              status.innerHTML = '<strong>Error:</strong> ' + safeHtmlMessage(res ? res.message : 'Failed to create sheet.');
             }
           })
           .withFailureHandler(function(err) {

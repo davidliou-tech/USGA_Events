@@ -742,11 +742,15 @@ function pullDriversFromPublic(publicSs, masterSs) {
 
       // Update if driver info differs or is new
       if (currentDriver !== claim.driverName) {
-        if (dNameIdx !== -1) mData[r][dNameIdx] = claim.driverName;
-        if (dPhoneIdx !== -1) mData[r][dPhoneIdx] = claim.driverPhone;
+        const sanitizeText = (typeof formatSheetTextValue === 'function') 
+          ? formatSheetTextValue 
+          : (val, isPhone) => (val ? "'" + String(val).trim() : "");
+
+        if (dNameIdx !== -1) mData[r][dNameIdx] = sanitizeText(claim.driverName, false);
+        if (dPhoneIdx !== -1) mData[r][dPhoneIdx] = sanitizeText(claim.driverPhone, true);
         if (dNotesIdx !== -1) {
           const notesCombined = (claim.driverVehicle ? `[${claim.driverVehicle}] ` : "") + claim.driverNotes;
-          mData[r][dNotesIdx] = notesCombined.trim();
+          mData[r][dNotesIdx] = sanitizeText(notesCombined.trim(), false);
         }
         if (statusIdx !== -1) {
           const curStatus = String(mData[r][statusIdx] || "").trim();
@@ -1434,63 +1438,94 @@ function installTransportationSyncTrigger(masterSs) {
  * and any standalone event spreadsheets registered in `PublicTransportEventSheetIds`.
  */
 function backgroundTransportationSync() {
-  const syncedSheetIds = new Set();
-
-  // 1. Active Spreadsheet (if any)
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (ss) {
-      const config = getTransportationSettings(ss);
-      if (config.publicTransportSheetId) {
-        syncTransportation(ss);
-        syncedSheetIds.add(ss.getId());
-      }
-    }
-  } catch (err) {
-    Logger.log("Background Transportation Sync (Active SS) Error: " + err.message);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) {
+    Logger.log("backgroundTransportationSync: Previous execution still active. Skipping turn.");
+    return;
   }
 
-  // 2. Monitored Events in FormsToMonitor
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 4.5 * 60 * 1000; // Cap at 4.5 minutes to stay well within 6-minute limit
+  const syncedSheetIds = new Set();
+
   try {
-    const props = PropertiesService.getScriptProperties();
-    const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
-    for (const formId in formsToMonitor) {
-      const cfg = formsToMonitor[formId];
-      if (!cfg || (!cfg.sheetId && !cfg.sheetUrl)) continue;
-      try {
-        const targetSs = cfg.sheetId
-          ? SpreadsheetApp.openById(cfg.sheetId)
-          : SpreadsheetApp.openByUrl(cfg.sheetUrl);
-        if (!targetSs || syncedSheetIds.has(targetSs.getId())) continue;
-        const tConfig = getTransportationSettings(targetSs);
-        if (tConfig.publicTransportSheetId) {
-          syncTransportation(targetSs);
-          syncedSheetIds.add(targetSs.getId());
+    // 1. Active Spreadsheet (if any)
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (ss) {
+        const config = getTransportationSettings(ss);
+        if (config.publicTransportSheetId) {
+          syncTransportation(ss, { isLightweight: true, failSilentlyOnLock: true });
+          syncedSheetIds.add(ss.getId());
         }
-      } catch (innerErr) {
-        Logger.log(`Background Transportation Sync skipped for form ${formId}: ${innerErr.message}`);
       }
+    } catch (err) {
+      Logger.log("Background Transportation Sync (Active SS) Error: " + err.message);
     }
 
-    // 3. Any additional event sheets registered via PublicTransportEventSheetIds
-    const trackedIds = JSON.parse(props.getProperty("PublicTransportEventSheetIds") || "[]");
-    for (let i = 0; i < trackedIds.length; i++) {
-      const sheetId = trackedIds[i];
-      if (!sheetId || syncedSheetIds.has(sheetId)) continue;
-      try {
-        const targetSs = SpreadsheetApp.openById(sheetId);
-        if (!targetSs) continue;
-        const tConfig = getTransportationSettings(targetSs);
-        if (tConfig.publicTransportSheetId) {
-          syncTransportation(targetSs);
-          syncedSheetIds.add(sheetId);
+    // 2. Monitored Events in FormsToMonitor
+    try {
+      const props = PropertiesService.getScriptProperties();
+      const formsToMonitor = JSON.parse(props.getProperty('FormsToMonitor') || '{}');
+      const now = Date.now();
+
+      for (const formId in formsToMonitor) {
+        if (Date.now() - startTime > MAX_RUNTIME_MS) {
+          Logger.log("backgroundTransportationSync: Time budget reached. Remaining events deferred.");
+          break;
         }
-      } catch (innerErr) {
-        Logger.log(`Background Transportation Sync skipped for sheet ID ${sheetId}: ${innerErr.message}`);
+
+        const cfg = formsToMonitor[formId];
+        if (!cfg) continue;
+
+        // Active Event Filter: Only sync events within 14 days before or 7 days after event date
+        const evDate = cfg.eventStart || cfg.es || cfg.start || cfg.s;
+        if (evDate && (now < evDate - 14 * 86400000 || now > evDate + 7 * 86400000)) {
+          continue;
+        }
+
+        const sheetId = cfg.sheetId || cfg.sid || (cfg.sheetUrl ? (cfg.sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) || [])[1] : null);
+        if (!sheetId || syncedSheetIds.has(sheetId)) continue;
+
+        try {
+          const targetSs = SpreadsheetApp.openById(sheetId);
+          if (!targetSs) continue;
+          const tConfig = getTransportationSettings(targetSs);
+          if (tConfig.publicTransportSheetId) {
+            syncTransportation(targetSs, { isLightweight: true, failSilentlyOnLock: true });
+            syncedSheetIds.add(sheetId);
+          }
+        } catch (innerErr) {
+          Logger.log(`Background Transportation Sync skipped for form ${formId}: ${innerErr.message}`);
+        }
       }
+
+      // 3. Any additional event sheets registered via PublicTransportEventSheetIds
+      const trackedIds = JSON.parse(props.getProperty("PublicTransportEventSheetIds") || "[]");
+      for (let i = 0; i < trackedIds.length; i++) {
+        if (Date.now() - startTime > MAX_RUNTIME_MS) {
+          Logger.log("backgroundTransportationSync: Time budget reached during tracked sheets.");
+          break;
+        }
+        const sheetId = trackedIds[i];
+        if (!sheetId || syncedSheetIds.has(sheetId)) continue;
+        try {
+          const targetSs = SpreadsheetApp.openById(sheetId);
+          if (!targetSs) continue;
+          const tConfig = getTransportationSettings(targetSs);
+          if (tConfig.publicTransportSheetId) {
+            syncTransportation(targetSs, { isLightweight: true, failSilentlyOnLock: true });
+            syncedSheetIds.add(sheetId);
+          }
+        } catch (innerErr) {
+          Logger.log(`Background Transportation Sync skipped for sheet ID ${sheetId}: ${innerErr.message}`);
+        }
+      }
+    } catch (err) {
+      Logger.log("Background Transportation Sync (Monitored Events) Error: " + err.message);
     }
-  } catch (err) {
-    Logger.log("Background Transportation Sync (Monitored Events) Error: " + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
